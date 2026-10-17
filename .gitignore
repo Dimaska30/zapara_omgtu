@@ -1,0 +1,32 @@
+.assistent
+
+# Dependency directories
+frontend/node_modules/
+
+# IDE related
+frontend/.idea
+
+# Test coverage
+frontend/coverage
+*.lcov
+
+# Optional eslint cache
+frontend/.eslintcache
+
+# dotenv environment variables file
+frontend/.env
+frontend/.env.test
+
+# build output
+frontend/.vercel
+
+# OS-specific
+frontend/.DS_Store
+
+frontend/tmp
+frontend/packages/svelte/scripts/_baseline/
+
+frontend/benchmarking/.profiles
+frontend/benchmarking/compare/.results
+frontend/benchmarking/compare/.profiles
+frontend/benchmarking/compare/results.html

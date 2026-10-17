@@ -1,0 +1,17 @@
+FROM node:22-alpine AS build
+
+WORKDIR /app
+
+# Пока в проекте нет package-lock.json, устанавливаем зависимости по package.json.
+COPY package.json ./
+
+RUN npm install --no-audit --no-fund
+
+COPY . .
+
+RUN npm run build
+
+# Экспортируем только собранный сайт в локальную папку dist.
+FROM scratch AS export
+
+COPY --from=build /app/dist/ /

@@ -1,0 +1,16 @@
+name: omgtu-schedule
+
+services:
+  preview:
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    ports:
+      - "8080:80"
+    volumes:
+      - type: bind
+        source: ../frontend/dist
+        target: /usr/share/nginx/html
+        read_only: true
+        bind:
+          create_host_path: false
