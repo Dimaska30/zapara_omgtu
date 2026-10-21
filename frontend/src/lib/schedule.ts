@@ -434,6 +434,15 @@ export function extractLessonDetail(event: ApiItem): LessonDetail {
   };
 }
 
+export function formatLessonKindShort(kind?: string): string {
+  if (!kind) return '';
+  const k = kind.trim().toLowerCase();
+  if (k.startsWith('лек')) return 'Л';
+  if (k.startsWith('пр') || k.includes('практ')) return 'ПЗ';
+  if (k.startsWith('лаб')) return 'ЛР';
+  return kind.slice(0, 3);
+}
+
 function lessonLabel(event: ApiItem): string {
   return extractLessonDetail(event).label;
 }

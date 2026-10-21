@@ -1677,9 +1677,9 @@ select:focus,
 
 .viewer-kind-prefix {
   font-size: 10px;
-  font-weight: 700;
-  color: #557262;
-  text-transform: lowercase;
+  font-weight: 800;
+  color: #4a6857;
+  letter-spacing: 0.02em;
 }
 
 .viewer-lesson-title {

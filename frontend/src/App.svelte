@@ -11,6 +11,7 @@
     buildWeeks,
     checkAuditoriumsAvailability,
     formatDate,
+    formatLessonKindShort,
     getAuditoriums,
     getBuildings,
     getBuildingSchedule,
@@ -1291,7 +1292,7 @@
                                               on:blur={hideViewerTooltip}
                                             >
                                               {#if lesson.kindOfWork}
-                                                <span class="viewer-kind-prefix">{lesson.kindOfWork.slice(0, 3).toLowerCase()}.</span>
+                                                <span class="viewer-kind-prefix">{formatLessonKindShort(lesson.kindOfWork)}</span>
                                               {/if}
                                               <strong class="viewer-lesson-title" title={lesson.discipline}>{lesson.discipline}</strong>
                                               <span class="viewer-lesson-details">
