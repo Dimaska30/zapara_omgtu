@@ -1119,9 +1119,8 @@
               {#if viewerEntities.length}
                 <div class="group-chips">
                   {#each viewerEntities as entity (entity.id + entity.type)}
-                    <span class="group-chip" class:aud-chip={entity.type === 'auditorium'}>
-                      <span class="chip-type-tag">{entity.type === 'group' ? 'Гр.' : entity.type === 'person' ? 'Преп.' : 'Ауд.'}</span>
-                      {entity.label}
+                    <span class="group-chip">
+                      {entity.type === 'auditorium' ? `Ауд. ${entity.label}` : entity.type === 'person' ? `Преп. ${entity.label}` : entity.label}
                       <button
                         type="button"
                         on:click={() => removeScheduleViewerEntity(entity.id, entity.type)}
@@ -1221,12 +1220,8 @@
             {:else}
               <div class="legend">
                 <span><i class="legend-dot free"></i>Свободно</span>
-                <span class="lesson-kind-tag kind-lek">Лекция</span>
-                <span class="lesson-kind-tag kind-pr">Практика</span>
-                <span class="lesson-kind-tag kind-lab">Лаб. раб.</span>
-                {#if viewerEntities.length > 1}
-                  <span>Ячейки разделены по горизонтали на строки участников</span>
-                {/if}
+                <span><i class="legend-dot selected"></i>Занятие</span>
+                <span>Подробности о паре — при наведении</span>
               </div>
 
               {#each viewerWeeks as week, index (week.monday)}
@@ -1240,7 +1235,7 @@
                   </div>
 
                   <div class="table-scroll">
-                    <div class="schedule-table" role="table" aria-label={`Неделя ${dateShort(week.monday)} — ${dateShort(week.saturday)}`}>
+                    <div class="schedule-table viewer-schedule-table" role="table" aria-label={`Неделя ${dateShort(week.monday)} — ${dateShort(week.saturday)}`}>
                       <div class="table-row table-head" role="row">
                         <div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>
                         {#each week.dates as date, day}
@@ -1275,8 +1270,8 @@
                                       class:line-busy={!lane.isFree}
                                     >
                                       {#if viewerEntities.length > 1}
-                                        <span class="viewer-line-badge" class:aud-badge={lane.entity.type === 'auditorium'}>
-                                          {lane.entity.label}
+                                        <span class="viewer-line-entity">
+                                          {lane.entity.label}:
                                         </span>
                                       {/if}
 
@@ -1287,7 +1282,7 @@
                                           {#each lane.lessons as lesson (lesson.discipline + (lesson.subgroup ?? '') + (lesson.auditorium ?? ''))}
                                             <!-- svelte-ignore a11y-no-static-element-interactions -->
                                             <div
-                                              class="viewer-lesson-chip"
+                                              class="viewer-lesson-line"
                                               tabindex="0"
                                               role="button"
                                               on:mouseenter={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
@@ -1295,41 +1290,37 @@
                                               on:focus={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
                                               on:blur={hideViewerTooltip}
                                             >
-                                              <div class="viewer-lesson-top">
-                                                {#if lesson.kindOfWork}
-                                                  <span class="lesson-kind-tag kind-{lesson.kindOfWork === 'Лекция' ? 'lek' : lesson.kindOfWork.startsWith('Пр') ? 'pr' : lesson.kindOfWork.startsWith('Лаб') ? 'lab' : 'other'}">
-                                                    {lesson.kindOfWork.slice(0, 3)}
-                                                  </span>
-                                                {/if}
-                                                <strong class="viewer-chip-title" title={lesson.discipline}>{lesson.discipline}</strong>
+                                              {#if lesson.kindOfWork}
+                                                <span class="viewer-kind-prefix">{lesson.kindOfWork.slice(0, 3).toLowerCase()}.</span>
+                                              {/if}
+                                              <strong class="viewer-lesson-title" title={lesson.discipline}>{lesson.discipline}</strong>
+                                              <span class="viewer-lesson-details">
                                                 {#if lesson.subgroup}
-                                                  <span class="lesson-subgroup-tag">п.{lesson.subgroup}</span>
+                                                  <span class="viewer-subgroup-info">п. {lesson.subgroup}</span>
                                                 {/if}
-                                              </div>
-                                              <div class="viewer-lesson-meta">
                                                 {#if lane.entity.type === 'group'}
                                                   {#if lesson.auditorium}
-                                                    <span class="viewer-chip-aud">ауд. {lesson.auditorium}</span>
+                                                    <span class="viewer-aud-info">ауд. {lesson.auditorium}</span>
                                                   {/if}
                                                   {#if lesson.lecturer}
-                                                    <span class="viewer-chip-meta" title={lesson.lecturer}>{lesson.lecturer}</span>
+                                                    <span class="viewer-person-info" title={lesson.lecturer}>{lesson.lecturer}</span>
                                                   {/if}
                                                 {:else if lane.entity.type === 'person'}
                                                   {#if lesson.auditorium}
-                                                    <span class="viewer-chip-aud">ауд. {lesson.auditorium}</span>
+                                                    <span class="viewer-aud-info">ауд. {lesson.auditorium}</span>
                                                   {/if}
                                                   {#if lesson.group}
-                                                    <span class="viewer-chip-meta" title={lesson.group}>{lesson.group}</span>
+                                                    <span class="viewer-person-info" title={lesson.group}>{lesson.group}</span>
                                                   {/if}
                                                 {:else}
                                                   {#if lesson.group}
-                                                    <span class="viewer-chip-meta" title={lesson.group}>{lesson.group}</span>
+                                                    <span class="viewer-person-info" title={lesson.group}>{lesson.group}</span>
                                                   {/if}
                                                   {#if lesson.lecturer}
-                                                    <span class="viewer-chip-meta" title={lesson.lecturer}>{lesson.lecturer}</span>
+                                                    <span class="viewer-person-info" title={lesson.lecturer}>{lesson.lecturer}</span>
                                                   {/if}
                                                 {/if}
-                                              </div>
+                                              </span>
                                             </div>
                                           {/each}
                                         </div>

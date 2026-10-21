@@ -1586,8 +1586,17 @@ select:focus,
 }
 
 /* ==========================================================================
-   Schedule Viewer (Сравнение расписания — горизонтальные строки)
+   Schedule Viewer (Сравнение расписания — чистый строчный вид)
    ========================================================================== */
+
+.viewer-schedule-table {
+  min-width: 1140px;
+  width: 100%;
+}
+
+.viewer-schedule-table .table-row {
+  grid-template-columns: 86px repeat(6, minmax(170px, 1fr));
+}
 
 .viewer-cell-wrap {
   min-height: 52px;
@@ -1607,159 +1616,96 @@ select:focus,
 
 .viewer-entity-line {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
   padding: 4px 6px;
-  border-radius: 5px;
-  min-height: 26px;
-  font-size: 10px;
-  transition: background 0.12s ease;
+  border-radius: 4px;
+  min-height: 24px;
+  font-size: 11px;
+  line-height: 1.35;
+  transition: all 0.12s ease;
 }
 
 .viewer-entity-line.line-free {
-  background: #f6f8f5;
-  color: #9aaa9e;
-  border: 1px dashed #e1e8df;
+  background: #f8faf8;
+  color: #a4b2a7;
+  border: 1px dashed #e4ede3;
 }
 
 .viewer-entity-line.line-busy {
-  background: #eef6f0;
-  border: 1px solid #c9e6d2;
+  background: #ffffff;
+  border: 1px solid #dfe5de;
   color: #172924;
+  box-shadow: 0 1px 2px rgba(23, 41, 36, 0.03);
 }
 
-.viewer-line-badge {
-  font-size: 8.5px;
+.viewer-entity-line.line-busy:hover {
+  border-color: #bad3c2;
+  box-shadow: 0 2px 5px rgba(23, 41, 36, 0.06);
+}
+
+.viewer-line-entity {
+  font-size: 10px;
   font-weight: 800;
-  background: #d8eadc;
-  color: #235c3b;
-  padding: 1px 5px;
-  border-radius: 3px;
-  white-space: nowrap;
+  color: #245f50;
   flex-shrink: 0;
-  letter-spacing: 0.02em;
-}
-
-.viewer-line-badge.aud-badge {
-  background: #edf5f0;
-  color: #1a4232;
-  border: 1px solid #c9e4d2;
+  white-space: nowrap;
 }
 
 .viewer-line-free-dash {
-  color: #9aaa9e;
-  font-size: 10px;
-  font-weight: 700;
+  color: #a4b2a7;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .viewer-line-lessons {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   flex: 1;
   min-width: 0;
 }
 
-.viewer-lesson-chip {
+.viewer-lesson-line {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 6px;
   cursor: pointer;
   text-align: left;
 }
 
-.viewer-lesson-top {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: wrap;
+.viewer-kind-prefix {
+  font-size: 10px;
+  font-weight: 700;
+  color: #557262;
+  text-transform: lowercase;
 }
 
-.viewer-chip-title {
-  font-size: 10.5px;
-  font-weight: 800;
-  color: #204533;
-  line-height: 1.25;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
+.viewer-lesson-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #172924;
+  word-break: break-word;
 }
 
-.viewer-lesson-meta {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 9.5px;
-  color: #728b7c;
-  font-weight: 600;
-  flex-wrap: wrap;
-}
-
-.viewer-chip-aud {
-  font-weight: 800;
-  color: #235c3b;
-  background: #ffffff;
-  border: 1px solid #abd4b7;
-  border-radius: 3px;
-  padding: 0 4px;
-  font-size: 9px;
-  white-space: nowrap;
-}
-
-.viewer-chip-meta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 140px;
-}
-
-/* Lesson kind tags */
-.lesson-kind-tag {
+.viewer-lesson-details {
   display: inline-flex;
-  align-items: center;
-  padding: 1px 4px;
-  border-radius: 3px;
-  font-size: 8.5px;
-  font-weight: 800;
-  line-height: 1.2;
-  white-space: nowrap;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 10px;
+  color: #71887b;
 }
 
-.kind-lek {
-  background: #ede9fe;
-  color: #5b21b6;
-  border: 1px solid #ddd6fe;
+.viewer-aud-info {
+  font-weight: 700;
+  color: #225d4e;
 }
 
-.kind-pr {
-  background: #fef3c7;
-  color: #92400e;
-  border: 1px solid #fde68a;
-}
-
-.kind-lab {
-  background: #cffafe;
-  color: #155e75;
-  border: 1px solid #a5f3fc;
-}
-
-.kind-other {
-  background: #f1f5f9;
-  color: #475569;
-  border: 1px solid #e2e8f0;
-}
-
-.lesson-subgroup-tag {
-  display: inline-flex;
-  align-items: center;
-  padding: 0 3px;
-  border-radius: 3px;
-  font-size: 8px;
-  font-weight: 800;
-  background: #eef2ed;
-  color: #556c5e;
-  border: 1px solid #d8e2d7;
+.viewer-subgroup-info,
+.viewer-person-info {
+  color: #71887b;
+  font-weight: 500;
 }
 
 .tooltip-meta-stack {
