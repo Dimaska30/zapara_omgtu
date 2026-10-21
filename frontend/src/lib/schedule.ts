@@ -691,7 +691,6 @@ export type ScheduleViewerEntity = {
   id: string;
   label: string;
   type: 'group' | 'person' | 'auditorium';
-  colorIndex: number;
 };
 
 export type ViewerLessonDetail = {
@@ -731,15 +730,6 @@ export type ViewerWeek = {
   dates: string[];
   rows: ViewerRow[];
 };
-
-export const VIEWER_ENTITY_COLORS = [
-  { name: 'emerald', text: '#15482e', bg: '#edf7f1', border: '#b2dec1', dot: '#23734a' },
-  { name: 'blue', text: '#163f68', bg: '#edf4fb', border: '#b5d5f2', dot: '#23659e' },
-  { name: 'purple', text: '#4e2366', bg: '#f7eefa', border: '#d9bbed', dot: '#733296' },
-  { name: 'amber', text: '#6b3f0c', bg: '#fef6ea', border: '#f2d5ab', dot: '#945811' },
-  { name: 'teal', text: '#124c4e', bg: '#edf8f8', border: '#b3e2e4', dot: '#1c6d70' },
-  { name: 'rose', text: '#681f24', bg: '#faeef0', border: '#ebbcbf', dot: '#912b32' }
-];
 
 export function buildViewerWeeks(
   start: string,
