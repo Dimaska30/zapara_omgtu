@@ -1175,10 +1175,7 @@
               type="button"
               disabled={viewerLoading || viewerEntities.length === 0 || viewerStart > viewerFinish}
               on:click={generateScheduleView}
-            >
-              <span>{viewerLoading ? 'Загружаем расписание…' : 'Показать расписание'}</span>
-              <span aria-hidden="true">↗</span>
-            </button>
+            >{viewerLoading ? 'Загружаем расписание…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
 
             <div class="panel-note">
               <span>ⓘ</span>
