@@ -421,17 +421,35 @@ export function extractLessonDetail(event: ApiItem): LessonDetail {
 
   const parts = [discipline];
   if (auditorium) parts.push(`ауд. ${auditorium}`);
-  if (lecturer) parts.push(lecturer);
+  if (lecturer) parts.push(formatShortName(lecturer));
   else if (group) parts.push(group);
 
   return {
     discipline,
     kindOfWork,
     auditorium,
-    lecturer,
+    lecturer: lecturer ? formatShortName(lecturer) : undefined,
     group,
     label: parts.join(' · ')
   };
+}
+
+export function formatShortName(name?: string): string {
+  if (!name) return '';
+  const clean = name.trim();
+  const withoutTitle = clean.replace(/^(доц\.|проф\.|асс\.|ст\.\s*преп\.|преп\.)\s+/i, '');
+  const parts = withoutTitle.split(/\s+/);
+  if (parts.length >= 3) {
+    const p1 = parts[1].replace(/\./g, '');
+    const p2 = parts[2].replace(/\./g, '');
+    const i1 = p1.length > 0 ? `${p1[0]}.` : '';
+    const i2 = p2.length > 0 ? `${p2[0]}.` : '';
+    return `${parts[0]} ${i1}${i2}`;
+  }
+  if (parts.length === 2 && parts[1].length > 2 && !parts[1].includes('.')) {
+    return `${parts[0]} ${parts[1][0]}.`;
+  }
+  return withoutTitle;
 }
 
 export function formatLessonKindShort(kind?: string): string {
@@ -779,7 +797,7 @@ export function buildViewerWeeks(
                 kindOfWork,
                 auditorium,
                 building,
-                lecturer,
+                lecturer: lecturer ? formatShortName(lecturer) : undefined,
                 group,
                 subgroup,
                 timeStart,

@@ -1590,18 +1590,18 @@ select:focus,
    ========================================================================== */
 
 .viewer-schedule-table {
-  min-width: 1140px;
+  min-width: 1660px;
   width: 100%;
 }
 
 .viewer-schedule-table .table-row {
-  grid-template-columns: 86px repeat(6, minmax(170px, 1fr));
+  grid-template-columns: 86px repeat(6, minmax(260px, 1fr));
 }
 
 .viewer-cell-wrap {
-  min-height: 52px;
+  min-height: 48px;
   height: auto;
-  padding: 4px;
+  padding: 5px 6px;
   background: #fdfefb;
   display: flex;
   flex-direction: column;
@@ -1624,6 +1624,8 @@ select:focus,
   font-size: 11px;
   line-height: 1.35;
   transition: all 0.12s ease;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .viewer-entity-line.line-free {
@@ -1649,6 +1651,9 @@ select:focus,
   font-weight: 800;
   color: #245f50;
   flex-shrink: 0;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -1692,20 +1697,34 @@ select:focus,
 .viewer-lesson-details {
   display: inline-flex;
   align-items: baseline;
+  flex-wrap: wrap;
   gap: 5px;
   font-size: 10px;
   color: #71887b;
+  min-width: 0;
 }
 
 .viewer-aud-info {
   font-weight: 700;
   color: #225d4e;
+  white-space: nowrap;
 }
 
-.viewer-subgroup-info,
+.viewer-subgroup-info {
+  color: #71887b;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
 .viewer-person-info {
   color: #71887b;
   font-weight: 500;
+  max-width: 170px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-block;
+  vertical-align: bottom;
 }
 
 .tooltip-meta-stack {

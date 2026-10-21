@@ -12,6 +12,7 @@
     checkAuditoriumsAvailability,
     formatDate,
     formatLessonKindShort,
+    formatShortName,
     getAuditoriums,
     getBuildings,
     getBuildingSchedule,
@@ -1271,8 +1272,8 @@
                                       class:line-busy={!lane.isFree}
                                     >
                                       {#if viewerEntities.length > 1}
-                                        <span class="viewer-line-entity">
-                                          {lane.entity.label}:
+                                        <span class="viewer-line-entity" title={lane.entity.label}>
+                                          {lane.entity.type === 'person' ? formatShortName(lane.entity.label) : lane.entity.label}:
                                         </span>
                                       {/if}
 
