@@ -454,7 +454,7 @@ export function toIso(date: Date): string {
 }
 
 function fromIso(iso: string): Date { return new Date(`${iso}T12:00:00`); }
-function addDays(date: Date, count: number): Date { const next = new Date(date); next.setDate(next.getDate() + count); return next; }
+export function addDays(date: Date, count: number): Date { const next = new Date(date); next.setDate(next.getDate() + count); return next; }
 
 export function formatDate(iso: string, options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'long' }): string {
   return new Intl.DateTimeFormat('ru-RU', options).format(fromIso(iso));
@@ -681,4 +681,130 @@ export function buildWeeks(
     });
   }
   return { weeks, unknownDates };
+}
+
+/* ==========================================================================
+   Multi-Entity Schedule Viewer
+   ========================================================================== */
+
+export type ScheduleViewerEntity = {
+  id: string;
+  label: string;
+  type: 'group' | 'person' | 'auditorium';
+  colorIndex: number;
+};
+
+export type ViewerLessonDetail = {
+  discipline: string;
+  kindOfWork?: string;
+  auditorium?: string;
+  building?: string;
+  lecturer?: string;
+  group?: string;
+  subgroup?: string;
+  timeStart?: string;
+  timeEnd?: string;
+  rawEvent: ApiItem;
+};
+
+export type ViewerCellLane = {
+  entity: ScheduleViewerEntity;
+  lessons: ViewerLessonDetail[];
+  isFree: boolean;
+};
+
+export type ViewerCell = {
+  key: string;
+  date: string;
+  outOfRange: boolean;
+  lanes: ViewerCellLane[];
+};
+
+export type ViewerRow = {
+  slot: Slot;
+  cells: ViewerCell[];
+};
+
+export type ViewerWeek = {
+  monday: string;
+  saturday: string;
+  dates: string[];
+  rows: ViewerRow[];
+};
+
+export const VIEWER_ENTITY_COLORS = [
+  { name: 'emerald', text: '#15482e', bg: '#edf7f1', border: '#b2dec1', dot: '#23734a' },
+  { name: 'blue', text: '#163f68', bg: '#edf4fb', border: '#b5d5f2', dot: '#23659e' },
+  { name: 'purple', text: '#4e2366', bg: '#f7eefa', border: '#d9bbed', dot: '#733296' },
+  { name: 'amber', text: '#6b3f0c', bg: '#fef6ea', border: '#f2d5ab', dot: '#945811' },
+  { name: 'teal', text: '#124c4e', bg: '#edf8f8', border: '#b3e2e4', dot: '#1c6d70' },
+  { name: 'rose', text: '#681f24', bg: '#faeef0', border: '#ebbcbf', dot: '#912b32' }
+];
+
+export function buildViewerWeeks(
+  start: string,
+  finish: string,
+  entities: ScheduleViewerEntity[],
+  entityEventsMap: Map<string, ApiItem[]>
+): ViewerWeek[] {
+  const indexed = new Map(entities.map((e) => [e.id, indexEvents(entityEventsMap.get(e.id) ?? [])]));
+  const startDate = fromIso(start);
+  const monday = addDays(startDate, -((startDate.getDay() + 6) % 7));
+  const weeks: ViewerWeek[] = [];
+
+  for (let weekStart = monday; toIso(weekStart) <= finish; weekStart = addDays(weekStart, 7)) {
+    const dates = Array.from({ length: 6 }, (_, i) => toIso(addDays(weekStart, i)));
+    weeks.push({
+      monday: dates[0],
+      saturday: dates[5],
+      dates,
+      rows: SLOTS.map((slot) => ({
+        slot,
+        cells: dates.map((date) => {
+          const outOfRange = date < start || date > finish;
+          const lanes: ViewerCellLane[] = entities.map((entity) => {
+            const dailyEvents = indexed.get(entity.id)?.byDate.get(date) ?? [];
+            const matched = outOfRange ? [] : slotEvents(dailyEvents, slot);
+            const lessons: ViewerLessonDetail[] = matched.map((event) => {
+              const discipline = extractDiscipline(event);
+              const auditorium = extractAuditorium(event);
+              const lecturer = extractLecturer(event);
+              const group = extractGroup(event);
+              const kindOfWork = event.kindOfWork ? String(event.kindOfWork).trim() : undefined;
+              const building = event.building ? String(event.building).trim() : undefined;
+              const subgroup = (event.subGroup || event.subgroup) ? String(event.subGroup || event.subgroup).trim() : undefined;
+              const timeStart = event.beginLesson ? String(event.beginLesson).trim() : slot.start;
+              const timeEnd = event.endLesson ? String(event.endLesson).trim() : slot.end;
+              return {
+                discipline,
+                kindOfWork,
+                auditorium,
+                building,
+                lecturer,
+                group,
+                subgroup,
+                timeStart,
+                timeEnd,
+                rawEvent: event
+              };
+            });
+            return {
+              entity,
+              lessons,
+              isFree: lessons.length === 0
+            };
+          });
+
+          return {
+            key: `${date}-${slot.number}`,
+            date,
+            outOfRange,
+            lanes
+          };
+        })
+      }))
+    });
+  }
+
+  return weeks;
 }

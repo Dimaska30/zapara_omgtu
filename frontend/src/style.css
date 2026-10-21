@@ -1584,3 +1584,451 @@ select:focus,
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* ==========================================================================
+   Schedule Viewer (Сравнение расписания)
+   ========================================================================== */
+
+.viewer-type-switch {
+  display: flex;
+  background: var(--surface-subtle, #f0eee9);
+  border: 1px solid var(--line-subtle, #e5e3dc);
+  border-radius: var(--radius-sm, 6px);
+  padding: 3px;
+  gap: 3px;
+  margin-bottom: 10px;
+}
+
+.viewer-type-switch button {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-muted, #686761);
+  cursor: pointer;
+  transition: all 0.15s ease;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.viewer-type-switch button:hover {
+  color: var(--text-main, #1e1e1e);
+}
+
+.viewer-type-switch button.active {
+  background: #ffffff;
+  color: var(--text-main, #1e1e1e);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.viewer-search-wrap {
+  margin-bottom: 10px;
+}
+
+.viewer-entity-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.viewer-entity-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid;
+  font-size: 12px;
+  transition: transform 0.12s ease;
+}
+
+.chip-color-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.chip-type-tag {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+
+.chip-name {
+  font-weight: 600;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chip-remove {
+  background: none;
+  border: none;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.55;
+  padding: 0 2px;
+  border-radius: 3px;
+  color: inherit;
+  transition: opacity 0.15s ease;
+}
+
+.chip-remove:hover {
+  opacity: 1;
+}
+
+/* Legend */
+.viewer-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #ffffff;
+  border: 1px solid var(--line-subtle, #e5e3dc);
+  border-radius: var(--radius-sm, 6px);
+  margin-bottom: 14px;
+}
+
+.viewer-legend-entities {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.legend-entity-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.legend-type {
+  font-size: 11px;
+  color: var(--text-muted, #686761);
+  font-weight: 400;
+}
+
+.viewer-legend-types {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Lesson kind tags */
+.lesson-kind-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1.3;
+}
+
+.kind-lek {
+  background: #ede9fe;
+  color: #5b21b6;
+  border: 1px solid #ddd6fe;
+}
+
+.kind-pr {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+
+.kind-lab {
+  background: #cffafe;
+  color: #155e75;
+  border: 1px solid #a5f3fc;
+}
+
+.kind-other {
+  background: #f1f5f9;
+  color: #475569;
+  border: 1px solid #e2e8f0;
+}
+
+.lesson-subgroup-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 9px;
+  font-weight: 600;
+  background: #f3f4f6;
+  color: #4b5563;
+  border: 1px solid #e5e7eb;
+}
+
+/* Table layout */
+.viewer-schedule-table {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.viewer-table-head th {
+  padding: 8px 6px;
+  vertical-align: top;
+}
+
+.viewer-header-day {
+  text-align: center;
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.viewer-header-date {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 12px;
+  color: var(--text-main, #1e1e1e);
+}
+
+.viewer-head-lanes {
+  display: grid;
+  grid-template-columns: repeat(var(--lane-count, 1), minmax(0, 1fr));
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.viewer-head-sub {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 3px;
+  border-bottom: 2px solid;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: block;
+  background: rgba(255, 255, 255, 0.6);
+  border-radius: 2px 2px 0 0;
+}
+
+.viewer-row {
+  border-bottom: 1px solid var(--line-subtle, #e5e3dc);
+}
+
+.viewer-cell-td {
+  padding: 3px;
+  vertical-align: top;
+  height: auto;
+  border-left: 1px solid var(--line-subtle, #e5e3dc);
+  border-bottom: 1px solid var(--line-subtle, #e5e3dc);
+  background: #ffffff;
+}
+
+.viewer-cell-td.out-of-range {
+  background: var(--surface-subtle, #faf8f5);
+}
+
+.viewer-cell-wrap {
+  min-height: 60px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.viewer-out-of-range {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted, #686761);
+  opacity: 0.35;
+  font-size: 12px;
+}
+
+.viewer-cell-lanes {
+  display: grid;
+  grid-template-columns: repeat(var(--lane-count, 1), minmax(0, 1fr));
+  gap: 3px;
+  min-height: 56px;
+  height: 100%;
+  align-items: stretch;
+}
+
+.viewer-lane {
+  border-left: 3px solid var(--lane-color, #c8c6bc);
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.7);
+  display: flex;
+  flex-direction: column;
+  transition: background 0.12s ease;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.viewer-lane.lane-free {
+  background: rgba(0, 0, 0, 0.01);
+}
+
+.viewer-lane.lane-has-lessons {
+  background: var(--lane-bg, #ffffff);
+}
+
+.viewer-free-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  min-height: 48px;
+  color: var(--line-strong, #c8c6bc);
+  opacity: 0.5;
+  font-size: 13px;
+  user-select: none;
+}
+
+.viewer-lane-lessons {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px;
+  height: 100%;
+}
+
+.viewer-lesson-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 6px;
+  background: #ffffff;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  text-align: left;
+}
+
+.viewer-lesson-card:hover,
+.viewer-lesson-card:focus {
+  border-color: var(--lane-color, var(--accent, #165b33));
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.09);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.lesson-card-top {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-wrap: wrap;
+}
+
+.lesson-card-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-main, #1e1e1e);
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.lesson-card-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-muted, #686761);
+  margin-top: 1px;
+}
+
+.lesson-card-aud {
+  font-weight: 600;
+  color: var(--accent, #165b33);
+}
+
+.lesson-card-group,
+.lesson-card-lecturer {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+/* Tooltip */
+.viewer-custom-tooltip {
+  width: 320px;
+  max-width: calc(100vw - 32px);
+}
+
+.viewer-tooltip-entity-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 7px;
+  border-radius: 4px;
+  border: 1px solid;
+}
+
+.viewer-tooltip-lesson-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--line-subtle, #e5e3dc);
+}
+
+.viewer-tooltip-disc {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-main, #1e1e1e);
+  line-height: 1.35;
+  flex: 1;
+}
+
+.viewer-tooltip-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.viewer-tooltip-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.viewer-tooltip-lbl {
+  color: var(--text-muted, #686761);
+  font-weight: 500;
+  flex-shrink: 0;
+  min-width: 95px;
+}
+
+.viewer-tooltip-val {
+  color: var(--text-main, #1e1e1e);
+  font-weight: 600;
+}

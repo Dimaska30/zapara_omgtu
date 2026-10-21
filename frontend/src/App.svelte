@@ -5,6 +5,9 @@
   import {
     AUDITORIUM_TYPE_CATEGORIES,
     DEFAULT_BUILDINGS,
+    SLOTS,
+    addDays,
+    buildViewerWeeks,
     buildWeeks,
     checkAuditoriumsAvailability,
     formatDate,
@@ -14,20 +17,24 @@
     getSchedule,
     matchesAuditoriumType,
     toIso,
+    VIEWER_ENTITY_COLORS,
     type ApiItem,
     type AuditoriumAvailabilityInfo,
     type AuditoriumItem,
     type Building,
     type Cell,
     type Group,
+    type ScheduleViewerEntity,
     type SearchItem,
     type Slot,
+    type ViewerLessonDetail,
+    type ViewerWeek,
     type Week,
     type WindowStatus
   } from './lib/schedule';
   import { COMMISSION_GROUPS } from './lib/commission';
 
-  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings';
+  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'schedule';
   type LoadedSchedule = {
     start: string;
     finish: string;
@@ -45,7 +52,8 @@
     { page: 'retakes', number: '01', name: 'Пересдачи', description: 'Подберите время для повторной сдачи', icon: '↗', active: true },
     { page: 'consultations', number: '02', name: 'Консультации', description: 'Найдите общие свободные окна', icon: '◷', active: true },
     { page: 'substitutions', number: '03', name: 'Замены', description: 'Найдите коллег для замены занятий', icon: '⇄', active: true },
-    { page: 'meetings', number: '04', name: 'Рабочие встречи', description: 'Найдите общее время для коллег', icon: '✧', active: true }
+    { page: 'meetings', number: '04', name: 'Рабочие встречи', description: 'Найдите общее время для коллег', icon: '✧', active: true },
+    { page: 'schedule', number: '05', name: 'Расписание', description: 'Сравнение расписания групп, преподавателей и аудиторий', icon: '▦', active: true }
   ];
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -111,6 +119,111 @@
     if (toastTimer) clearTimeout(toastTimer);
     toastMessage = msg;
     toastTimer = setTimeout(() => { toastMessage = null; }, 3500);
+  }
+
+  // Schedule viewer state
+  type ViewerEntityWithColor = ScheduleViewerEntity & {
+    color: (typeof VIEWER_ENTITY_COLORS)[number];
+  };
+
+  let viewerEntities: ViewerEntityWithColor[] = [];
+  let viewerActiveType: 'group' | 'person' | 'auditorium' = 'group';
+  let viewerStart: string = toIso(new Date());
+  let viewerFinish: string = toIso(addDays(new Date(), 21));
+  let viewerWeeks: ViewerWeek[] = [];
+  let viewerLoading: boolean = false;
+  let viewerError: string | null = null;
+  let viewerHasGenerated: boolean = false;
+
+  type ActiveViewerTooltip = {
+    lesson: ViewerLessonDetail;
+    entity: ViewerEntityWithColor;
+    slot: Slot;
+    date: string;
+    x: number;
+    y: number;
+    placement: 'top' | 'bottom';
+  };
+
+  let activeViewerTooltip: ActiveViewerTooltip | null = null;
+
+  function showViewerTooltip(lesson: ViewerLessonDetail, entity: ViewerEntityWithColor, slot: Slot, date: string, event: MouseEvent | FocusEvent) {
+    const target = event.currentTarget as HTMLElement | null;
+    if (!target) return;
+    const rect = target.getBoundingClientRect();
+    const placement: 'top' | 'bottom' = rect.top > 250 ? 'top' : 'bottom';
+    const x = Math.max(170, Math.min(window.innerWidth - 170, rect.left + rect.width / 2));
+    const y = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
+    activeViewerTooltip = { lesson, entity, slot, date, x, y, placement };
+  }
+
+  function hideViewerTooltip() {
+    activeViewerTooltip = null;
+  }
+
+  function addScheduleViewerEntity(item: SearchItem, entityType: 'group' | 'person' | 'auditorium') {
+    if (viewerEntities.some((e) => e.id === item.id && e.type === entityType)) return;
+    const colorIndex = viewerEntities.length % VIEWER_ENTITY_COLORS.length;
+    viewerEntities = [
+      ...viewerEntities,
+      {
+        id: item.id,
+        label: item.label,
+        type: entityType,
+        colorIndex,
+        color: VIEWER_ENTITY_COLORS[colorIndex]
+      }
+    ];
+    if (viewerHasGenerated) {
+      void generateScheduleView();
+    }
+  }
+
+  function removeScheduleViewerEntity(id: string, entityType: 'group' | 'person' | 'auditorium') {
+    viewerEntities = viewerEntities
+      .filter((e) => !(e.id === id && e.type === entityType))
+      .map((e, idx) => ({
+        ...e,
+        colorIndex: idx % VIEWER_ENTITY_COLORS.length,
+        color: VIEWER_ENTITY_COLORS[idx % VIEWER_ENTITY_COLORS.length]
+      }));
+    if (viewerEntities.length === 0) {
+      viewerWeeks = [];
+      viewerHasGenerated = false;
+      return;
+    }
+    if (viewerHasGenerated) {
+      void generateScheduleView();
+    }
+  }
+
+  async function generateScheduleView() {
+    if (viewerEntities.length === 0) {
+      viewerError = 'Выберите хотя бы одну группу, преподавателя или аудиторию.';
+      return;
+    }
+    viewerLoading = true;
+    viewerError = null;
+    try {
+      const entityEventsMap = new Map<string, ApiItem[]>();
+      await Promise.all(
+        viewerEntities.map(async (entity) => {
+          try {
+            const events = await getSchedule(entity.type, entity.id, viewerStart, viewerFinish);
+            entityEventsMap.set(entity.id, events);
+          } catch (e) {
+            console.error(`Failed to load schedule for ${entity.label}:`, e);
+            entityEventsMap.set(entity.id, []);
+          }
+        })
+      );
+      viewerWeeks = buildViewerWeeks(viewerStart, viewerFinish, viewerEntities, entityEventsMap);
+      viewerHasGenerated = true;
+    } catch (e: any) {
+      viewerError = e?.message ?? 'Не удалось загрузить расписание для выбранных объектов';
+    } finally {
+      viewerLoading = false;
+    }
   }
 
   $: groupsStepNumber = (page === 'retakes' && retakeMode === 'commission') ? '03' : '02';
@@ -606,7 +719,7 @@
   }
 </script>
 
-<svelte:window on:scroll={hideTooltip} />
+<svelte:window on:scroll={() => { hideTooltip(); hideViewerTooltip(); }} />
 
 <svelte:head>
   <title>{page === 'home' ? 'Запара — планирование для преподавателей' : page === 'consultations' ? 'Консультации — Запара' : `${sections.find((section) => section.page === page)?.name} — Запара`}</title>
@@ -624,6 +737,7 @@
       <button type="button" class:nav-current={page === 'consultations'} on:click={() => go('consultations')}>Консультации</button>
       <button type="button" class:nav-current={page === 'substitutions'} on:click={() => go('substitutions')}>Замены</button>
       <button type="button" class:nav-current={page === 'meetings'} on:click={() => go('meetings')}>Встречи</button>
+      <button type="button" class:nav-current={page === 'schedule'} on:click={() => go('schedule')}>Расписание</button>
     </nav>
     <span class="topbar-note">Расписание ОмГТУ <span class="online-dot"></span></span>
   </header>
@@ -941,6 +1055,339 @@
           {/if}
         </div>
       {/if}
+    {:else if page === 'schedule'}
+      <div class="workspace">
+        <div class="breadcrumb">
+          <button type="button" on:click={() => go('home')}>Главная</button>
+          <span>/</span>
+          <span>Расписание</span>
+        </div>
+        <section class="workspace-heading">
+          <div>
+            <span class="section-kicker">ПРОСМОТР / 05</span>
+            <h1>Сравнение расписания<span class="heading-period">.</span></h1>
+            <p>Просматривайте и сравнивайте расписание групп, преподавателей и аудиторий в едином календаре с динамическими слотами.</p>
+          </div>
+          <div class="heading-decoration" aria-hidden="true">▦</div>
+        </section>
+
+        <div class="workspace-layout">
+          <aside class="controls-panel">
+            <div class="panel-top">
+              <span class="panel-number">01 — ВЫБОР ОБЪЕКТОВ</span>
+              <h2>Что отобразить в сетке?</h2>
+            </div>
+
+            <div class="field-block">
+              <div class="field-head">
+                <label>Тип объекта</label>
+                <span>01</span>
+              </div>
+              <div class="viewer-type-switch" role="group" aria-label="Тип объекта">
+                <button
+                  type="button"
+                  class:active={viewerActiveType === 'group'}
+                  aria-pressed={viewerActiveType === 'group'}
+                  on:click={() => (viewerActiveType = 'group')}
+                >
+                  Группа
+                </button>
+                <button
+                  type="button"
+                  class:active={viewerActiveType === 'person'}
+                  aria-pressed={viewerActiveType === 'person'}
+                  on:click={() => (viewerActiveType = 'person')}
+                >
+                  Преподаватель
+                </button>
+                <button
+                  type="button"
+                  class:active={viewerActiveType === 'auditorium'}
+                  aria-pressed={viewerActiveType === 'auditorium'}
+                  on:click={() => (viewerActiveType = 'auditorium')}
+                >
+                  Аудитория
+                </button>
+              </div>
+
+              <div class="viewer-search-wrap">
+                {#if viewerActiveType === 'group'}
+                  <SearchField
+                    type="group"
+                    placeholder="Например, ФИТ-211 или М-251"
+                    onPick={(item) => addScheduleViewerEntity(item, 'group')}
+                  />
+                {:else if viewerActiveType === 'person'}
+                  <SearchField
+                    type="person"
+                    placeholder="Начните вводить ФИО преподавателя"
+                    onPick={(item) => addScheduleViewerEntity(item, 'person')}
+                  />
+                {:else}
+                  <SearchField
+                    type="auditorium"
+                    placeholder="Номер или название аудитории, напр. 6-308"
+                    onPick={(item) => addScheduleViewerEntity(item, 'auditorium')}
+                  />
+                {/if}
+              </div>
+
+              {#if viewerEntities.length}
+                <div class="viewer-entity-chips">
+                  {#each viewerEntities as entity (entity.id + entity.type)}
+                    <div
+                      class="viewer-entity-chip"
+                      style="border-color: {entity.color.border}; background: {entity.color.bg}; color: {entity.color.text};"
+                    >
+                      <span class="chip-color-dot" style="background: {entity.color.dot};"></span>
+                      <span class="chip-type-tag">
+                        {entity.type === 'group' ? 'Группа' : entity.type === 'person' ? 'Преподаватель' : 'Ауд.'}
+                      </span>
+                      <strong class="chip-name">{entity.label}</strong>
+                      <button
+                        type="button"
+                        class="chip-remove"
+                        on:click={() => removeScheduleViewerEntity(entity.id, entity.type)}
+                        aria-label={`Удалить ${entity.label}`}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {:else}
+                <p class="field-hint">Добавьте одну или несколько сущностей для совместного просмотра расписания.</p>
+              {/if}
+            </div>
+
+            <div class="field-block">
+              <div class="field-head">
+                <label>Период</label>
+                <span>02</span>
+              </div>
+              <div class="period-inputs">
+                <input
+                  type="date"
+                  bind:value={viewerStart}
+                  aria-label="Дата начала"
+                  on:change={() => {
+                    if (viewerHasGenerated) void generateScheduleView();
+                  }}
+                />
+                <span>—</span>
+                <input
+                  type="date"
+                  bind:value={viewerFinish}
+                  aria-label="Дата окончания"
+                  on:change={() => {
+                    if (viewerHasGenerated) void generateScheduleView();
+                  }}
+                />
+              </div>
+            </div>
+
+            <div class="panel-actions">
+              <button
+                type="button"
+                class="btn-generate"
+                disabled={viewerLoading || viewerEntities.length === 0}
+                on:click={generateScheduleView}
+              >
+                {viewerLoading ? 'Загрузка...' : 'Показать расписание'}
+              </button>
+            </div>
+
+            {#if viewerError}
+              <div class="panel-error-box">
+                <p class="form-error">{viewerError}</p>
+              </div>
+            {/if}
+          </aside>
+
+          <section class="results-panel">
+            <div class="panel-top">
+              <span class="panel-number">02 — КАЛЕНДАРЬ РАСПИСАНИЯ</span>
+              <h2>Сетка расписания</h2>
+            </div>
+
+            {#if viewerEntities.length === 0}
+              <div class="panel-empty-state">
+                <div class="empty-icon">▦</div>
+                <h3>Выберите объекты для просмотра</h3>
+                <p>Добавьте учебные группы, преподавателей или аудитории в левой панели, чтобы открыть сравнительное расписание.</p>
+              </div>
+            {:else if viewerLoading}
+              <div class="loading-state">
+                <div class="spinner"></div>
+                <span>Загружаем расписание для выбранных объектов...</span>
+              </div>
+            {:else if !viewerHasGenerated}
+              <div class="panel-empty-state">
+                <div class="empty-icon">📅</div>
+                <h3>Готово к просмотру</h3>
+                <p>Выбрано объектов: {viewerEntities.length}. Нажмите кнопку «Показать расписание».</p>
+                <button type="button" class="btn-generate inline-btn" on:click={generateScheduleView}>
+                  Показать расписание
+                </button>
+              </div>
+            {:else}
+              <div class="viewer-legend">
+                <div class="viewer-legend-entities">
+                  {#each viewerEntities as entity}
+                    <div class="legend-entity-item">
+                      <span class="legend-dot" style="background: {entity.color.dot};"></span>
+                      <strong style="color: {entity.color.text};">{entity.label}</strong>
+                      <small class="legend-type">({entity.type === 'group' ? 'группа' : entity.type === 'person' ? 'преподаватель' : 'аудитория'})</small>
+                    </div>
+                  {/each}
+                </div>
+                <div class="viewer-legend-types">
+                  <span class="lesson-kind-tag kind-lek">Лекция</span>
+                  <span class="lesson-kind-tag kind-pr">Практика</span>
+                  <span class="lesson-kind-tag kind-lab">Лаб. раб.</span>
+                </div>
+              </div>
+
+              <div class="weeks-flow">
+                {#each viewerWeeks as week, wIdx (week.monday)}
+                  <article class="week-block">
+                    <header class="week-heading">
+                      <h3>{formatDate(week.monday)} — {formatDate(week.saturday, { day: 'numeric', month: 'long', year: 'numeric' })}</h3>
+                      <span>{wIdx + 1} неделя</span>
+                    </header>
+
+                    <div class="table-wrap">
+                      <table class="schedule-table viewer-schedule-table">
+                        <thead class="viewer-table-head">
+                          <tr>
+                            <th class="time-header">Пара</th>
+                            {#each week.dates as date}
+                              <th class="viewer-header-day">
+                                <span class="viewer-header-date">{formatDate(date, { weekday: 'short', day: 'numeric', month: 'short' })}</span>
+                                {#if viewerEntities.length > 1}
+                                  <div class="viewer-head-lanes" style="--lane-count: {viewerEntities.length};">
+                                    {#each viewerEntities as entity}
+                                      <span
+                                        class="viewer-head-sub"
+                                        title="{entity.label} ({entity.type === 'group' ? 'группа' : entity.type === 'person' ? 'преподаватель' : 'аудитория'})"
+                                        style="border-bottom-color: {entity.color.dot}; color: {entity.color.text};"
+                                      >
+                                        {entity.label}
+                                      </span>
+                                    {/each}
+                                  </div>
+                                {/if}
+                              </th>
+                            {/each}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {#each week.rows as row (row.slot.number)}
+                            <tr class="viewer-row">
+                              <th class="slot-header">
+                                <strong>{row.slot.number}</strong>
+                                <small>{row.slot.start}</small>
+                                <small>{row.slot.end}</small>
+                              </th>
+                              {#each row.cells as cell (cell.key)}
+                                <td class="viewer-cell-td" class:out-of-range={cell.outOfRange}>
+                                  {#if cell.outOfRange}
+                                    <div class="viewer-cell-wrap viewer-out-of-range">
+                                      <span class="out-range-label">—</span>
+                                    </div>
+                                  {:else}
+                                    <div
+                                      class="viewer-cell-wrap"
+                                      class:has-lessons={cell.lanes.some((l) => l.lessons.length > 0)}
+                                    >
+                                      <div
+                                        class="viewer-cell-lanes"
+                                        style="--lane-count: {cell.lanes.length};"
+                                      >
+                                        {#each cell.lanes as lane (lane.entity.id + lane.entity.type)}
+                                          <div
+                                            class="viewer-lane"
+                                            class:lane-has-lessons={lane.lessons.length > 0}
+                                            class:lane-free={lane.isFree}
+                                            style="--lane-color: {lane.entity.color.dot}; --lane-bg: {lane.entity.color.bg};"
+                                          >
+                                            {#if lane.lessons.length === 0}
+                                              <div class="viewer-free-slot" title="{lane.entity.label}: свободно">
+                                                <span class="free-dash">—</span>
+                                              </div>
+                                            {:else}
+                                              <div class="viewer-lane-lessons">
+                                                {#each lane.lessons as lesson (lesson.discipline + (lesson.subgroup ?? '') + (lesson.auditorium ?? ''))}
+                                                  <!-- svelte-ignore a11y-no-static-element-interactions -->
+                                                  <div
+                                                    class="viewer-lesson-card"
+                                                    tabindex="0"
+                                                    role="button"
+                                                    on:mouseenter={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
+                                                    on:mouseleave={hideViewerTooltip}
+                                                    on:focus={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
+                                                    on:blur={hideViewerTooltip}
+                                                  >
+                                                    <div class="lesson-card-top">
+                                                      {#if lesson.kindOfWork}
+                                                        <span class="lesson-kind-tag kind-{lesson.kindOfWork === 'Лекция' ? 'lek' : lesson.kindOfWork.startsWith('Пр') ? 'pr' : lesson.kindOfWork.startsWith('Лаб') ? 'lab' : 'other'}">
+                                                          {lesson.kindOfWork.slice(0, 3)}
+                                                        </span>
+                                                      {/if}
+                                                      {#if lesson.subgroup}
+                                                        <span class="lesson-subgroup-tag">п.{lesson.subgroup}</span>
+                                                      {/if}
+                                                    </div>
+                                                    <div class="lesson-card-title" title={lesson.discipline}>
+                                                      {lesson.discipline}
+                                                    </div>
+                                                    <div class="lesson-card-meta">
+                                                      {#if lane.entity.type === 'group'}
+                                                        {#if lesson.auditorium}
+                                                          <span class="lesson-card-aud">ауд. {lesson.auditorium}</span>
+                                                        {/if}
+                                                        {#if lesson.lecturer}
+                                                          <span class="lesson-card-lecturer">{lesson.lecturer}</span>
+                                                        {/if}
+                                                      {:else if lane.entity.type === 'person'}
+                                                        {#if lesson.auditorium}
+                                                          <span class="lesson-card-aud">ауд. {lesson.auditorium}</span>
+                                                        {/if}
+                                                        {#if lesson.group}
+                                                          <span class="lesson-card-group">{lesson.group}</span>
+                                                        {/if}
+                                                      {:else}
+                                                        {#if lesson.group}
+                                                          <span class="lesson-card-group">{lesson.group}</span>
+                                                        {/if}
+                                                        {#if lesson.lecturer}
+                                                          <span class="lesson-card-lecturer">{lesson.lecturer}</span>
+                                                        {/if}
+                                                      {/if}
+                                                    </div>
+                                                  </div>
+                                                {/each}
+                                              </div>
+                                            {/if}
+                                          </div>
+                                        {/each}
+                                      </div>
+                                    </div>
+                                  {/if}
+                                </td>
+                              {/each}
+                            </tr>
+                          {/each}
+                        </tbody>
+                      </table>
+                    </div>
+                  </article>
+                {/each}
+              </div>
+            {/if}
+          </section>
+        </div>
+      </div>
     {/if}
   </main>
 
@@ -1166,6 +1613,66 @@
             </div>
           </div>
         {/if}
+      </div>
+    </div>
+  {/if}
+
+  {#if activeViewerTooltip}
+    {@const item = activeViewerTooltip}
+    {@const lesson = item.lesson}
+    <div
+      class="custom-tooltip viewer-custom-tooltip tooltip-{item.placement}"
+      style="left: {item.x}px; top: {item.y}px;"
+      role="tooltip"
+    >
+      <div class="tooltip-header">
+        <span class="tooltip-time">
+          {formatDate(item.date, { weekday: 'short', day: 'numeric', month: 'short' })} · {item.slot.number} пара ({item.slot.start}–{item.slot.end})
+        </span>
+        <span
+          class="tooltip-badge viewer-tooltip-entity-badge"
+          style="border-color: {item.entity.color.border}; background: {item.entity.color.bg}; color: {item.entity.color.text};"
+        >
+          {item.entity.label}
+        </span>
+      </div>
+
+      <div class="tooltip-body">
+        <div class="viewer-tooltip-lesson-head">
+          <strong class="viewer-tooltip-disc">{lesson.discipline}</strong>
+          {#if lesson.kindOfWork}
+            <span class="lesson-kind-tag kind-{lesson.kindOfWork === 'Лекция' ? 'lek' : lesson.kindOfWork.startsWith('Пр') ? 'pr' : lesson.kindOfWork.startsWith('Лаб') ? 'lab' : 'other'}">
+              {lesson.kindOfWork}
+            </span>
+          {/if}
+        </div>
+
+        <div class="viewer-tooltip-grid">
+          {#if lesson.lecturer}
+            <div class="viewer-tooltip-row">
+              <span class="viewer-tooltip-lbl">Преподаватель:</span>
+              <span class="viewer-tooltip-val">{lesson.lecturer}</span>
+            </div>
+          {/if}
+          {#if lesson.group}
+            <div class="viewer-tooltip-row">
+              <span class="viewer-tooltip-lbl">Группа:</span>
+              <span class="viewer-tooltip-val">{lesson.group}{#if lesson.subgroup} (подгр. {lesson.subgroup}){/if}</span>
+            </div>
+          {/if}
+          {#if lesson.auditorium}
+            <div class="viewer-tooltip-row">
+              <span class="viewer-tooltip-lbl">Аудитория:</span>
+              <span class="viewer-tooltip-val">ауд. {lesson.auditorium}{#if lesson.building} ({lesson.building}){/if}</span>
+            </div>
+          {/if}
+          {#if lesson.timeStart && lesson.timeEnd}
+            <div class="viewer-tooltip-row">
+              <span class="viewer-tooltip-lbl">Время:</span>
+              <span class="viewer-tooltip-val">{lesson.timeStart}–{lesson.timeEnd}</span>
+            </div>
+          {/if}
+        </div>
       </div>
     </div>
   {/if}
