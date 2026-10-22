@@ -661,7 +661,35 @@
     }
     return 'без окон';
   }
+  type DisplayMode = 'windows' | 'classic';
+  const DISPLAY_MODE_STORAGE_KEY = 'zapara_display_mode';
+  let displayMode: DisplayMode = 'windows';
+
+  if (typeof window !== 'undefined') {
+    const savedMode = localStorage.getItem(DISPLAY_MODE_STORAGE_KEY);
+    if (savedMode === 'windows' || savedMode === 'classic') {
+      displayMode = savedMode;
+    }
+  }
+
+  function setDisplayMode(mode: DisplayMode) {
+    displayMode = mode;
+    if (typeof window !== 'undefined') {
+      localStorage.setItem(DISPLAY_MODE_STORAGE_KEY, mode);
+    }
+    if (mode === 'classic') {
+      hideTooltip();
+    }
+  }
+
   function cellAriaLabel(cell: Cell, slot: { start: string; end: string }): string {
+    if (displayMode === 'classic') {
+      if (cell.outOfRange) return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, вне периода`;
+      if (!cell.available) return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, ${page === 'substitutions' ? 'нет занятия' : page === 'meetings' ? 'не все преподаватели свободны' : cell.teacherBusy ? 'преподаватель занят' : 'все группы заняты'}`;
+      if (page === 'meetings') return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, свободно, все преподаватели свободны`;
+      if (page === 'substitutions') return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, занятие: ${cell.lessons.join(', ')}`;
+      return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, свободно: ${cell.freeGroups.map((group) => group.label).join(', ')}`;
+    }
     if (cell.outOfRange) return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, вне периода`;
     if (!cell.available) return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, ${cell.unavailableText ?? 'занято'}`;
     if (page === 'meetings') return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, свободно, все преподаватели свободны (${windowStatusFull(cell)})`;
@@ -669,6 +697,7 @@
     return `${formatDate(cell.date)}, ${slot.start}–${slot.end}, свободно (${windowStatusFull(cell)}), свободны: ${cell.freeGroups.map((group) => group.label).join(', ')}`;
   }
   function cellTitle(cell: Cell): string {
+    if (displayMode === 'classic') return '';
     if (cell.outOfRange) return 'Вне периода';
     if (!cell.available) {
       const details: string[] = [];
@@ -693,6 +722,7 @@
   let activeTooltip: ActiveTooltip | null = null;
 
   function showTooltip(cell: Cell, slot: Slot, event: MouseEvent | FocusEvent) {
+    if (displayMode === 'classic') return;
     const target = event.currentTarget as HTMLElement | null;
     if (!target) return;
     const rect = target.getBoundingClientRect();
@@ -961,7 +991,37 @@
           </aside>
 
           <section class="results-panel" aria-live="polite">
-            <div class="results-header"><div><span class="panel-number">02 — РЕЗУЛЬТАТ</span><h2>{page === 'substitutions' ? 'Занятия и доступные замены' : 'Общие свободные окна'}</h2></div>{#if hasGenerated}<span class="week-count">{weeks.length} {weeks.length === 1 ? 'неделя' : weeks.length < 5 ? 'недели' : 'недель'}</span>{/if}</div>
+            <div class="results-header">
+              <div>
+                <span class="panel-number">02 — РЕЗУЛЬТАТ</span>
+                <h2>{page === 'substitutions' ? 'Занятия и доступные замены' : 'Общие свободные окна'}</h2>
+              </div>
+              <div class="results-header-actions">
+                <div class="display-mode-toggle" role="group" aria-label="Режим отображения расписания">
+                  <button
+                    type="button"
+                    class:active={displayMode === 'windows'}
+                    aria-pressed={displayMode === 'windows'}
+                    title="Цветные статусы окон, мини-чипы и подробная карточка при наведении"
+                    on:click={() => setDisplayMode('windows')}
+                  >
+                    С окнами
+                  </button>
+                  <button
+                    type="button"
+                    class:active={displayMode === 'classic'}
+                    aria-pressed={displayMode === 'classic'}
+                    title="Упрощённый классический вид как в основной версии: без цветных окон и карточек"
+                    on:click={() => setDisplayMode('classic')}
+                  >
+                    Классический
+                  </button>
+                </div>
+                {#if hasGenerated}
+                  <span class="week-count">{weeks.length} {weeks.length === 1 ? 'неделя' : weeks.length < 5 ? 'недели' : 'недель'}</span>
+                {/if}
+              </div>
+            </div>
             {#if error}<div class="state-card error-card"><span class="state-icon">!</span><h3>Не удалось получить расписание</h3><p>{error}</p><button type="button" on:click={generate}>Повторить запрос ↗</button></div>
             {:else if loading}<div class="state-card"><span class="state-icon loading-icon">◷</span><h3>Сопоставляем расписания</h3><p>{page === 'substitutions' ? 'Загружаем занятия и расписания возможных замещающих преподавателей.' : page === 'meetings' ? 'Загружаем расписания выбранных преподавателей.' : 'Загружаем основного преподавателя, группы и выбранный состав комиссии.'}</p></div>
             {:else if !hasGenerated}<div class="state-card empty-card"><div class="empty-illustration"><span>01</span><span>02</span><span>03</span><span>04</span></div><h3>{page === 'substitutions' ? 'Здесь появятся занятия' : 'Здесь появятся свободные окна'}</h3><p>{page === 'substitutions' ? 'Выберите преподавателя, которого нужно заменить, укажите возможных заменяющих и период. Мы покажем его занятия и доступность коллег.' : page === 'meetings' ? 'Добавьте преподавателей и укажите даты. Мы покажем пары, свободные у всех выбранных.' : `Выберите преподавателя, добавьте группы и укажите даты.${page === 'retakes' && retakeMode === 'commission' ? ' Для комиссии укажите людей или тематическую группу.' : ''} Мы покажем общие свободные пары по неделям.`}</p></div>
@@ -972,6 +1032,13 @@
                   <span><i class="legend-dot selected"></i>Выбрано</span>
                   <span><i class="legend-dot unavailable"></i>Нет занятия</span>
                   <span>Доступность заменяющих указана справочно под слотом</span>
+                {:else if displayMode === 'classic'}
+                  <span><i class="legend-dot free"></i>Можно выбрать</span>
+                  <span><i class="legend-dot selected"></i>Выбрано</span>
+                  <span><i class="legend-dot unavailable"></i>{page === 'meetings' ? 'Не все преподаватели свободны' : 'Нет общего окна'}</span>
+                  {#if page === 'retakes' && retakeMode === 'commission'}
+                    <span>Комиссия указана справочно под слотом</span>
+                  {/if}
                 {:else}
                   <span><i class="legend-dot window-none"></i>Без окон</span>
                   <span><i class="legend-dot window-group"></i>{groups.length > 1 ? 'Окно у групп' : 'Окно у группы'}</span>
@@ -991,11 +1058,11 @@
               {#each weeks as week, index}
                 <div class="week-block"><div class="week-title"><div><span>НЕДЕЛЯ {String(index + 1).padStart(2, '0')}</span><h3>{dateShort(week.monday)} — {dateShort(week.saturday)}</h3></div><span>ПН — СБ</span></div>
                   <div class="table-scroll"><div class="schedule-table" role="table" aria-label={`Неделя ${dateShort(week.monday)} — ${dateShort(week.saturday)}`}>
-                    <div class="table-row table-head" role="row"><div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>{#each week.dates as date, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="columnheader" class:col-teacher-free={dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={dStatus && dStatus.bothFreeDay} title={dStatus?.tooltipText || ''}><div class="head-day-info"><strong>{dayNames[day]}</strong><span>{dateShort(date)}</span></div>{#if dStatus && dStatus.bothFreeDay}<span class="day-col-badge badge-both">{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у всех' : 'Без пар у обоих')}</span>{:else if dStatus && dStatus.teacherFreeDay}<span class="day-col-badge badge-teacher">{dStatus.badgeLabel || 'Без пар у преп.'}</span>{:else if dStatus && dStatus.groupFreeDay}<span class="day-col-badge badge-group">{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у групп' : 'Без пар у группы')}</span>{/if}</div>{/each}</div>
+                    <div class="table-row table-head" role="row"><div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>{#each week.dates as date, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="columnheader" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} title={displayMode === 'windows' ? (dStatus?.tooltipText || '') : ''}>{#if displayMode === 'windows'}<div class="head-day-info"><strong>{dayNames[day]}</strong><span>{dateShort(date)}</span></div>{#if dStatus && dStatus.bothFreeDay}<span class="day-col-badge badge-both">{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у всех' : 'Без пар у обоих')}</span>{:else if dStatus && dStatus.teacherFreeDay}<span class="day-col-badge badge-teacher">{dStatus.badgeLabel || 'Без пар у преп.'}</span>{:else if dStatus && dStatus.groupFreeDay}<span class="day-col-badge badge-group">{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у групп' : 'Без пар у группы')}</span>{/if}{:else}<strong>{dayNames[day]}</strong><span>{dateShort(date)}</span>{/if}</div>{/each}</div>
                     {#each week.rows as row, rowIndex}<div class="table-row" role="row"><div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
-                      {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:col-teacher-free={dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={dStatus && dStatus.bothFreeDay} class:col-last-row={rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={cell.available && cell.windowStatus === 'none'} class:window-group={cell.available && cell.windowStatus === 'group-window'} class:window-teacher={cell.available && cell.windowStatus === 'teacher-window'} class:window-both={cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => showTooltip(cell, row.slot, e)} on:mouseleave={hideTooltip} on:focus={(e) => showTooltip(cell, row.slot, e)} on:blur={hideTooltip} on:click={() => toggle(cell)}>
+                      {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
                         {#if selected.has(cell.key) && slotAssignedAuditoriums.has(cell.key)}<span class="cell-assigned-aud-chip">Ауд. {slotAssignedAuditoriums.get(cell.key)?.name}</span>{/if}
-                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-busy={!t.available} title={t.person.label}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if page === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={detail.group.label}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}
+                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if page === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-busy={!t.available} title={t.person.label}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if page === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={detail.group.label}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
                         {#if (page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{page === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
                       </button>
                       {#if (page === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
@@ -1348,7 +1415,7 @@
 
   <footer class="footer"><span><strong>Запара</strong> / пространство преподавателя</span><span>Разработал ассистент кафедры ПМиФИ Плескунов Д.А.</span></footer>
 
-  {#if activeTooltip}
+  {#if activeTooltip && displayMode === 'windows'}
     {@const cell = activeTooltip.cell}
     {@const slot = activeTooltip.slot}
     <div
@@ -1863,7 +1930,7 @@
                         {formatDate(item.cell.date, { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' })}
                       </span>
                       <div class="selected-slot-tags">
-                        {#if item.cell.windowStatus !== 'none'}
+                        {#if displayMode === 'windows' && item.cell.windowStatus !== 'none'}
                           <span class="slot-badge tag-{item.cell.windowStatus}">
                             {windowStatusShort(item.cell.windowStatus)}
                           </span>
