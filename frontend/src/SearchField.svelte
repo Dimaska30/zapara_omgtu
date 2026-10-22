@@ -65,7 +65,11 @@
 
 <div class="search-field">
   <div class="search-input-wrap">
-    <svg class="search-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4.2 4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    {#if loading}
+      <span class="search-spinner" aria-label="Поиск"></span>
+    {:else}
+      <svg class="search-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" stroke="currentColor" stroke-width="1.8"/><path d="m16 16 4.2 4.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    {/if}
     <input
       type="search"
       autocomplete="off"
@@ -79,7 +83,6 @@
       on:focus={() => { if (type === 'auditorium' ? query.trim().length >= 1 : query.trim().length > 3) expanded = true; }}
       on:blur={() => setTimeout(() => expanded = false, 150)}
     />
-    {#if loading}<span class="search-spinner" aria-label="Поиск"></span>{/if}
   </div>
   {#if expanded}
     <div class="suggestions" id={resultsId} role="listbox">
