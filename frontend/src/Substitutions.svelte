@@ -37,6 +37,8 @@
   let start = toIso(firstMonday);
   let finish = toIso(addDays(firstMonday, 12));
   let department = 'ПМФИ';
+  let departmentChoice = 'ПМФИ';
+  let customDepartment = '';
   let teachers: SearchItem[] = [];
   let weeks: ViewerWeek[] = [];
   let rows: BoardRow[] = [];
@@ -57,6 +59,16 @@
   let otherFailedIds = new Set<string>();
   let topicLoading = false;
   let notice = '';
+  let rowStatusIndex = new Map<string, TeacherSlot>();
+  $: rowStatusIndex = indexRows(rows);
+
+  function indexRows(items: BoardRow[]): Map<string, TeacherSlot> {
+    const index = new Map<string, TeacherSlot>();
+    for (const row of items) {
+      for (const item of row.teachers) index.set(`${row.date}:${row.slot.number}:${item.teacher.id}`, item);
+    }
+    return index;
+  }
 
   function normalizedDepartment() {
     return department.trim().toLocaleLowerCase('ru-RU') === 'пмфи' ? PFI_NAME : department.trim();
@@ -131,7 +143,9 @@
       const query = normalizedDepartment();
       const found = await search(query, 'person');
       const lowerQuery = query.toLocaleLowerCase('ru-RU');
-      const matching = found.filter((person) => person.description.toLocaleLowerCase('ru-RU').includes(lowerQuery));
+      const matching = [...new Map(found
+        .filter((person) => person.description.toLocaleLowerCase('ru-RU').includes(lowerQuery))
+        .map((person) => [person.id, person] as const)).values()];
       if (!matching.length) {
         teachers = [];
         rows = [];
@@ -159,6 +173,10 @@
 
   function lessonTitle(lesson: ViewerLessonDetail) {
     return [lesson.discipline, lesson.kindOfWork, lesson.group, lesson.auditorium ? `ауд. ${lesson.auditorium}` : ''].filter(Boolean).join(' · ');
+  }
+
+  function teacherSlot(date: string, slotNumber: number, id: string): TeacherSlot | undefined {
+    return rowStatusIndex.get(`${date}:${slotNumber}:${id}`);
   }
 
   function openReplacement(teacher: SearchItem, date: string, slot: Slot, lesson: ViewerLessonDetail) {
@@ -260,7 +278,7 @@
   <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / 03</span><h1>Замены занятий<span class="heading-period">.</span></h1><p>Найдите занятие на кафедре и подберите свободного коллегу для замены.</p></div><div class="heading-decoration" aria-hidden="true">⇄</div></section>
 
   <section class="substitution-controls" aria-label="Фильтры расписания замен">
-    <div class="sub-filter department-filter"><label for="sub-department">Кафедра</label><div class="sub-input-with-note"><input id="sub-department" bind:value={department} on:keydown={(event) => event.key === 'Enter' && refreshBoard()} placeholder="Например, ПМФИ" /><span>Введите ПМФИ или название другой кафедры</span></div></div>
+    <div class="sub-filter department-filter"><label for="sub-department">Кафедра</label><select id="sub-department" bind:value={departmentChoice} on:change={() => { department = departmentChoice === 'ПМФИ' ? 'ПМФИ' : customDepartment; }}><option value="ПМФИ">ПМФИ</option><option value="other">Другая кафедра</option></select>{#if departmentChoice === 'other'}<input id="sub-custom-department" bind:value={customDepartment} on:keydown={(event) => event.key === 'Enter' && (department = customDepartment, refreshBoard())} on:input={() => department = customDepartment} placeholder="Введите название кафедры" />{/if}</div>
     <div class="sub-filter"><label for="sub-start">Период с</label><input id="sub-start" type="date" bind:value={start} /></div>
     <div class="sub-filter"><label for="sub-finish">по</label><input id="sub-finish" type="date" min={start} bind:value={finish} /></div>
     <button class="primary-button sub-load-button" type="button" disabled={loading || start > finish} on:click={refreshBoard}>{loading ? 'Загружаем…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
@@ -281,29 +299,48 @@
       <section class="week-block sub-week">
         <div class="week-title"><div><span>НЕДЕЛЯ</span><h3>{formatDate(week.monday)} — {formatDate(week.saturday)}</h3></div><span>ПН — СБ · {teachers.length} ПРЕПОДАВАТЕЛЕЙ</span></div>
         <div class="table-scroll">
-          <table class="substitution-table">
-            <thead><tr><th class="sub-date-heading">День / пара</th>{#each teachers as person (person.id)}<th title={`${person.label} · ${person.description}`}>{formatShortName(person.label)}<small>{person.label}</small></th>{/each}</tr></thead>
-            <tbody>
-              {#each rows.filter((row) => row.date >= week.monday && row.date <= week.saturday) as row (row.date + row.slot.number)}
-                <tr class:sub-day-start={row.slot.number === 1}>
-                  <th class="sub-slot-heading"><strong>{formatDate(row.date, { weekday: 'short', day: '2-digit', month: '2-digit' })}</strong><span>{row.slot.number} пара · {row.slot.start}–{row.slot.end}</span></th>
-                  {#each row.teachers as teacherSlot (teacherSlot.teacher.id)}
-                    <td>
-                      {#if teacherSlot.status === 'busy'}
-                        {#each teacherSlot.lessons as lesson (lesson.discipline + (lesson.group ?? '') + (lesson.auditorium ?? ''))}
-                          <button type="button" class="sub-lesson" title={`${teacherSlot.teacher.label}: ${lessonTitle(lesson)}. Подобрать замену`} on:click={() => openReplacement(teacherSlot.teacher, row.date, row.slot, lesson)}>
-                            <strong>{lesson.discipline}</strong><span>{lesson.kindOfWork ? `${lesson.kindOfWork} · ` : ''}{lesson.group ?? 'Занятие'}</span>
-                          </button>
+          <div class="schedule-table viewer-schedule-table sub-schedule-table" role="table" aria-label={`Неделя ${formatDate(week.monday)} — ${formatDate(week.saturday)}`}>
+            <div class="table-row table-head" role="row">
+              <div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>
+              {#each week.dates as date, day}<div role="columnheader"><div class="head-day-info"><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][day]}</strong><span>{formatDate(date, { day: '2-digit', month: '2-digit' })}</span></div></div>{/each}
+            </div>
+            {#each week.rows as row (row.slot.number)}
+              <div class="table-row" role="row">
+                <div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
+                {#each row.cells as cell (cell.key)}
+                  <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:out-of-range={cell.outOfRange}>
+                    {#if cell.outOfRange}
+                      <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
+                    {:else}
+                      <div class="viewer-lines-stack">
+                        {#each cell.lanes as lane (lane.entity.id)}
+                          {@const state = teacherSlot(cell.date, row.slot.number, lane.entity.id)}
+                          {#if state}
+                            <div class="viewer-entity-line sub-teacher-line" class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'}>
+                              <span class="viewer-line-entity" title={lane.entity.label}>{formatShortName(lane.entity.label)}:</span>
+                              {#if state.status === 'busy'}
+                                <div class="viewer-line-lessons">
+                                  {#each lane.lessons as lesson, lessonIndex (lessonIndex)}
+                                    <button type="button" class="substitution-lesson-button" title={`${lane.entity.label}: ${lessonTitle(lesson)}. Подобрать замену`} on:click={() => openReplacement(state.teacher, cell.date, row.slot, lesson)}>
+                                      {#if lesson.kindOfWork}<span class="viewer-kind-prefix">{lesson.kindOfWork}</span>{/if}
+                                      <strong class="viewer-lesson-title">{lesson.discipline}</strong>
+                                      <span class="viewer-lesson-details">{#if lesson.group}<span class="viewer-person-info">{lesson.group}</span>{/if}{#if lesson.auditorium}<span class="viewer-aud-info">ауд. {lesson.auditorium}</span>{/if}</span>
+                                    </button>
+                                  {/each}
+                                </div>
+                              {:else}
+                                <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? 'Окно' : state.status === 'error' ? 'Нет данных' : 'Нет пар сегодня'}</span>
+                              {/if}
+                            </div>
+                          {/if}
                         {/each}
-                      {:else}
-                        <span class="sub-status" class:status-free={teacherSlot.status === 'free'} class:status-window={teacherSlot.status === 'window'} class:status-no-lessons={teacherSlot.status === 'no-lessons'} class:status-error={teacherSlot.status === 'error'}>{teacherSlot.status === 'free' ? 'Свободен' : teacherSlot.status === 'window' ? 'Окно' : teacherSlot.status === 'error' ? 'Нет данных' : 'Нет пар'}</span>
-                      {/if}
-                    </td>
-                  {/each}
-                </tr>
-              {/each}
-            </tbody>
-          </table>
+                      </div>
+                    {/if}
+                  </div>
+                {/each}
+              </div>
+            {/each}
+          </div>
         </div>
       </section>
     {/each}
@@ -360,11 +397,12 @@
 
 <style>
   .substitution-workspace{max-width:1600px}
-  .substitution-controls{display:grid;grid-template-columns:minmax(250px,1.4fr) minmax(145px,.7fr) minmax(145px,.7fr) auto;align-items:end;gap:14px;background:#fff;border:1px solid #e4eae3;border-radius:12px;padding:18px 20px;margin:0 0 18px}
-  .sub-filter{display:flex;flex-direction:column;gap:7px;min-width:0}.sub-filter label{font-size:10px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#799085}.sub-filter input{height:42px;min-width:0;border:1px solid #dce5de;border-radius:7px;background:#fbfdfb;padding:0 11px;color:#25463a;font:inherit;font-size:12px}.sub-input-with-note{display:flex;flex-direction:column;gap:5px}.sub-input-with-note span{font-size:9px;color:#8b9b92}.sub-load-button{height:42px;padding:0 15px;white-space:nowrap;font-size:11px}
+  .substitution-controls{display:grid;grid-template-columns:minmax(280px,1.5fr) minmax(155px,.7fr) minmax(155px,.7fr) auto;align-items:end;gap:12px;background:#fff;border:1px solid #e4eae3;border-radius:9px;padding:12px 14px;margin:0 0 14px}
+  .sub-filter{display:flex;flex-direction:column;gap:5px;min-width:0}.sub-filter label{font-size:10px;font-weight:700;color:#718279}.sub-filter input,.sub-filter select{height:36px;min-width:0;border:1px solid #dce5de;border-radius:6px;background:#fbfdfb;padding:0 9px;color:#25463a;font:inherit;font-size:11px}.sub-load-button{height:36px;padding:0 13px;white-space:nowrap;font-size:10px}
   .substitution-legend{display:flex;align-items:center;flex-wrap:wrap;gap:9px 20px;padding:0 2px;margin:0 0 15px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}
-  .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}.sub-week .table-scroll{max-height:72vh}.substitution-table{border-collapse:separate;border-spacing:0;min-width:max-content;width:100%;font-size:10px}.substitution-table th,.substitution-table td{border-right:1px solid #edf0ea;border-bottom:1px solid #edf0ea;padding:5px;vertical-align:middle}.substitution-table thead th{position:sticky;top:0;z-index:3;background:#f7faf6;color:#38604b;text-align:center;min-width:134px;max-width:190px;height:45px}.substitution-table thead th small{display:block;margin-top:2px;font-size:8px;color:#91a096;font-weight:600}.substitution-table thead .sub-date-heading{left:0;z-index:5;min-width:130px;text-align:left}.substitution-table tbody th{position:sticky;left:0;z-index:2;background:#fbfdfb;text-align:left;min-width:130px}.sub-slot-heading strong,.sub-slot-heading span{display:block}.sub-slot-heading strong{font-size:10px;color:#315d49;text-transform:capitalize}.sub-slot-heading span{margin-top:3px;font-size:8px;color:#8b9a91;font-weight:600}.substitution-table tbody td{min-width:134px;max-width:190px;height:40px;background:#fff}.substitution-table .sub-day-start th,.substitution-table .sub-day-start td{border-top:2px solid #dfe8e1}.sub-lesson{display:flex;flex-direction:column;gap:3px;width:100%;min-height:38px;text-align:left;border:1px solid #dce5de;border-radius:5px;background:#f4f7f4;padding:5px 7px;color:#40584a}.sub-lesson:hover{background:#eaf4ed;border-color:#9dc9a9}.sub-lesson strong{font-size:9px;line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sub-lesson span{font-size:8px;color:#8a9990;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sub-status{display:block;padding:5px 6px;border-radius:5px;text-align:center;font-size:8px;font-weight:800}.status-free{background:#eaf4ed!important;color:#235c3b!important;border:1px solid #c9e6d2!important}.status-window{background:#fdfaf0!important;color:#7a541c!important;border:1px solid #f2e2b6!important}.status-no-lessons{background:#fff0f0!important;color:#a32a2a!important;border:1px solid #f6c0c0!important}.status-error{background:#f2f4f2!important;color:#718279!important;border:1px solid #dbe2dd!important}
+  .sub-week .table-scroll{max-height:72vh}.sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr))}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:flex-start}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.substitution-lesson-button{display:flex;align-items:baseline;gap:5px;width:100%;min-width:0;border:0;border-radius:3px;background:transparent;padding:0;text-align:left;color:#344d40;font:inherit}.substitution-lesson-button:hover .viewer-lesson-title{color:#287454;text-decoration:underline}.substitution-lesson-button .viewer-lesson-title{font-size:10px}.substitution-lesson-button .viewer-lesson-details{display:flex;flex-wrap:wrap;gap:4px;min-width:0}.sub-status-text{font-size:9px;font-weight:700;white-space:nowrap}
+  .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:300px;overflow:auto}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
-  @media(max-width:900px){.substitution-controls{grid-template-columns:1fr 1fr}.department-filter{grid-column:span 2}.sub-load-button{width:100%;justify-content:center}}
-  @media(max-width:560px){.substitution-controls{grid-template-columns:1fr}.department-filter{grid-column:auto}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
+  @media(max-width:900px){.substitution-controls{grid-template-columns:minmax(180px,1.3fr) 1fr 1fr}.sub-load-button{grid-column:3;justify-self:stretch;justify-content:center}}
+  @media(max-width:560px){.substitution-controls{grid-template-columns:1fr 1fr}.department-filter{grid-column:span 2}.sub-load-button{grid-column:span 2;width:100%}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
 </style>
