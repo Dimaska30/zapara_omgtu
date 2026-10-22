@@ -15,7 +15,7 @@
     formatDate,
     formatShortName,
     getSchedule,
-    search,
+    searchDepartmentTeachers,
     toIso,
     type ApiItem,
     type SearchItem,
@@ -38,6 +38,7 @@
     return monday;
   }
   const today = new Date();
+  let currentDateIso = toIso(today);
   const firstMonday = mondayOf(today);
   let start = toIso(firstMonday);
   let finish = toIso(addDays(firstMonday, 12));
@@ -155,11 +156,7 @@
     selectedLesson = null;
     try {
       const query = normalizedDepartment();
-      const found = await search(query, 'person');
-      const lowerQuery = query.toLocaleLowerCase('ru-RU');
-      const matching = [...new Map(found
-        .filter((person) => person.description.toLocaleLowerCase('ru-RU').includes(lowerQuery))
-        .map((person) => [person.id, person] as const)).values()];
+      const matching = await searchDepartmentTeachers(query);
       if (!matching.length) {
         teachers = [];
         rows = [];
@@ -167,7 +164,7 @@
         eventsByTeacher = new Map();
         failedTeacherIds = new Set();
         hasLoaded = true;
-        if (found.length) error = `По запросу «${department}» преподаватели не найдены. Уточните название кафедры.`;
+        error = `По запросу «${department}» преподаватели не найдены. Уточните название кафедры.`;
         return;
       }
       teachers = matching;
@@ -355,7 +352,12 @@
     notice = `${candidate.person.label} выбран(а) как замена на ${formatDate(selectedLesson!.date)}, ${selectedLesson!.slot.start}–${selectedLesson!.slot.end}.`;
   }
 
-  onMount(() => { void refreshBoard(); });
+  onMount(() => {
+    const updateCurrentDate = () => { currentDateIso = toIso(new Date()); };
+    const currentDateTimer = window.setInterval(updateCurrentDate, 60_000);
+    void refreshBoard();
+    return () => window.clearInterval(currentDateTimer);
+  });
 </script>
 
 <PlannerPageFrame section="ПЛАНИРОВАНИЕ" sectionNumber="03" breadcrumb="Замены" title="Замены занятий" description="Найдите занятие на кафедре и подберите свободного коллегу для замены" icon="⇄" on:home>
@@ -401,7 +403,7 @@
           <div class="schedule-table viewer-schedule-table sub-schedule-table" role="table" aria-label={`Неделя ${formatDate(week.monday)} — ${formatDate(week.saturday)}`}>
             <div class="table-row table-head" role="row">
               <div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>
-              {#each week.dates as date, day}<div role="columnheader"><div class="head-day-info"><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][day]}</strong><span>{formatDate(date, { day: '2-digit', month: '2-digit' })}</span></div></div>{/each}
+              {#each week.dates as date, day}<div role="columnheader" class:today-column={date === currentDateIso}><div class="head-day-info"><strong>{['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][day]}</strong><span>{formatDate(date, { day: '2-digit', month: '2-digit' })}</span></div></div>{/each}
             </div>
             {#each week.rows as row (row.slot.number)}
               <div class="table-row" role="row">
@@ -411,7 +413,7 @@
                     const status = teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status;
                     return status === 'busy' || status === 'error' || (showFreeTeachers && status === 'free') || (showWindowTeachers && status === 'window');
                   }) : cell.lanes}
-                  <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:out-of-range={cell.outOfRange}>
+                  <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:today-column={cell.date === currentDateIso} class:out-of-range={cell.outOfRange}>
                     {#if cell.outOfRange}
                       <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
                     {:else}

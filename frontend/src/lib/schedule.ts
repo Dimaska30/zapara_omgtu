@@ -178,6 +178,57 @@ export async function search(term: string, type: 'person' | 'group' | 'auditoriu
   });
 }
 
+let cachedGroupCatalog: Group[] | null = null;
+export async function getGroupCatalog(signal?: AbortSignal): Promise<Group[]> {
+  if (cachedGroupCatalog) return cachedGroupCatalog;
+  const items = await getJson('/dictionary/groups', signal);
+  cachedGroupCatalog = items.flatMap((item) => {
+    const id = item.groupOid ?? item.id ?? item.oid;
+    const label = String(item.name ?? item.number ?? '').trim();
+    if (id === undefined || id === null || id === '' || !label) return [];
+    return [{
+      id: String(id),
+      label,
+      description: [item.faculty, item.formOfEducation].filter(Boolean).join(' | ')
+    }];
+  });
+  return cachedGroupCatalog;
+}
+
+const departmentTeacherCache = new Map<string, SearchItem[]>();
+function normalizePersonLabel(value: string) {
+  return value.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/[\s.]+/g, '');
+}
+
+export async function searchDepartmentTeachers(department: string, signal?: AbortSignal): Promise<SearchItem[]> {
+  const normalizedDepartment = department.trim().toLocaleLowerCase('ru-RU');
+  const cached = departmentTeacherCache.get(normalizedDepartment);
+  if (cached) return cached;
+
+  const lecturerDirectory = await getJson('/dictionary/lecturers', signal);
+  const roster = [...new Set(lecturerDirectory.flatMap((item) => {
+    const chair = String(item.chair ?? '').toLocaleLowerCase('ru-RU');
+    const label = String(item.shortFIO ?? item.fio ?? '').trim();
+    return chair.includes(normalizedDepartment) && label && !/^вакансия(?:[\s_]|$)/iu.test(label) ? [label] : [];
+  }))];
+  const found: SearchItem[] = [];
+  for (let offset = 0; offset < roster.length; offset += 8) {
+    const batch = roster.slice(offset, offset + 8);
+    const results = await Promise.all(batch.map((label) => search(label, 'person', signal)));
+    results.forEach((people, index) => {
+      const expectedLabel = normalizePersonLabel(batch[index]);
+      for (const person of people) {
+        if (normalizePersonLabel(person.label) !== expectedLabel) continue;
+        if (!person.description.toLocaleLowerCase('ru-RU').includes(normalizedDepartment)) continue;
+        found.push(person);
+      }
+    });
+  }
+  const unique = [...new Map(found.map((person) => [person.id, person] as const)).values()];
+  departmentTeacherCache.set(normalizedDepartment, unique);
+  return unique;
+}
+
 export async function getSchedule(type: 'person' | 'group' | 'auditorium', id: string, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
   const params = new URLSearchParams({ start, finish, lng: '1' });
   return getJson(`/schedule/${type}/${encodeURIComponent(id)}?${params}`, signal);
