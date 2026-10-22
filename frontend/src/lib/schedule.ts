@@ -61,6 +61,7 @@ export type TeacherSlotDetail = {
   person: SearchItem;
   busy: boolean;
   hasWindow: boolean;
+  noLessons: boolean;
   available: boolean;
   reason: 'free' | 'busy' | 'no-lessons' | 'load-error';
   lessons: string[];
@@ -654,7 +655,7 @@ export function buildWeeks(
             const personLessonDetails = personSlotLessons.map(extractLessonDetail);
             const lessons = [...new Set(personLessonDetails.map((l) => l.label))];
             const reason = commissionOptions.failedIds.has(person.id) ? 'load-error' : commissionOptions.mercy && dailyEvents.length === 0 ? 'no-lessons' : busy ? 'busy' : 'free';
-            return { person, busy, hasWindow, available: reason === 'free', reason, lessons, lessonDetails: personLessonDetails };
+            return { person, busy, hasWindow, noLessons: dailyEvents.length === 0, available: reason === 'free', reason, lessons, lessonDetails: personLessonDetails };
           }) ?? []);
           const commission: CommissionAvailability[] = teachersDetails.map((t) => ({ person: t.person, available: t.available, reason: t.reason }));
 
