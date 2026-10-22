@@ -26,6 +26,7 @@
   type BoardRow = { date: string; slot: Slot; teachers: TeacherSlot[] };
   type SelectedLesson = { teacher: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
   type Candidate = { person: SearchItem; status: Status | 'loading' | 'error' };
+  type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
 
   function mondayOf(date: Date) {
     const monday = new Date(date);
@@ -37,6 +38,8 @@
   let start = toIso(firstMonday);
   let finish = toIso(addDays(firstMonday, 12));
   let department = 'ПМФИ';
+  let activeOnly = true;
+  let activeLessonTooltip: HoverLesson | null = null;
   let teachers: SearchItem[] = [];
   let weeks: ViewerWeek[] = [];
   let rows: BoardRow[] = [];
@@ -177,6 +180,30 @@
     return rowStatusIndex.get(`${date}:${slotNumber}:${id}`);
   }
 
+  function showLessonTooltip(event: MouseEvent | FocusEvent, lesson: ViewerLessonDetail, teacher: SearchItem, date: string, slot: Slot) {
+    const target = event.currentTarget as HTMLElement | null;
+    if (target) activeLessonTooltip = { lesson, teacher, date, slot, targetRect: target.getBoundingClientRect() };
+  }
+
+  function positionSubTooltip(node: HTMLElement, targetRect: DOMRect) {
+    function position(rect: DOMRect) {
+      const margin = 12;
+      const gap = 8;
+      const width = node.offsetWidth;
+      const height = node.offsetHeight;
+      const left = Math.max(margin, Math.min(window.innerWidth - width - margin, rect.left + rect.width / 2 - width / 2));
+      const top = rect.top - height - gap >= margin ? rect.top - height - gap : Math.min(window.innerHeight - height - margin, rect.bottom + gap);
+      node.style.left = `${Math.round(left)}px`;
+      node.style.top = `${Math.round(Math.max(margin, top))}px`;
+      node.classList.toggle('tooltip-top', top < rect.top);
+      node.classList.toggle('tooltip-bottom', top >= rect.top);
+    }
+    position(targetRect);
+    const resize = () => position(targetRect);
+    window.addEventListener('resize', resize);
+    return { update(rect: DOMRect) { targetRect = rect; position(targetRect); }, destroy() { window.removeEventListener('resize', resize); } };
+  }
+
   function openReplacement(teacher: SearchItem, date: string, slot: Slot, lesson: ViewerLessonDetail) {
     selectedLesson = { teacher, date, slot, lesson };
     pickedReplacement = null;
@@ -287,6 +314,7 @@
     <span><i class="sub-legend-dot window"></i>Свободен, окно</span>
     <span><i class="sub-legend-dot no-lessons"></i>Нет пар сегодня</span>
     <span><i class="sub-legend-dot busy"></i>Занятие · нажмите для замены</span>
+    <button type="button" class="sub-active-toggle" class:active={activeOnly} aria-pressed={activeOnly} on:click={() => activeOnly = !activeOnly}>{activeOnly ? '✓' : '○'} Только активные пары</button>
   </div>
 
   {#if error}<div class="sub-state error">{error}</div>
@@ -306,12 +334,13 @@
               <div class="table-row" role="row">
                 <div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                 {#each row.cells as cell (cell.key)}
+                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status === 'busy') : cell.lanes}
                   <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:out-of-range={cell.outOfRange}>
                     {#if cell.outOfRange}
                       <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
                     {:else}
                       <div class="viewer-lines-stack">
-                        {#each cell.lanes as lane (lane.entity.id)}
+                        {#each visibleLanes as lane (lane.entity.id)}
                           {@const state = teacherSlot(cell.date, row.slot.number, lane.entity.id)}
                           {#if state}
                             <div class="viewer-entity-line sub-teacher-line" class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'}>
@@ -319,7 +348,7 @@
                               {#if state.status === 'busy'}
                                 <div class="viewer-line-lessons">
                                   {#each lane.lessons as lesson, lessonIndex (lessonIndex)}
-                                    <button type="button" class="substitution-lesson-button" title={`${lane.entity.label}: ${lessonTitle(lesson)}. Нажмите, чтобы подобрать замену`} aria-label={`${lane.entity.label}: ${lessonTitle(lesson)}. Подобрать замену`} on:click={() => openReplacement(state.teacher, cell.date, row.slot, lesson)}>
+                                    <button type="button" class="substitution-lesson-button" title="Наведите для подробностей. Нажмите, чтобы подобрать замену" aria-label={`${lane.entity.label}: ${lessonTitle(lesson)}. Подобрать замену`} on:mouseenter={(event) => showLessonTooltip(event, lesson, state.teacher, cell.date, row.slot)} on:mouseleave={() => activeLessonTooltip = null} on:focus={(event) => showLessonTooltip(event, lesson, state.teacher, cell.date, row.slot)} on:blur={() => activeLessonTooltip = null} on:click={() => openReplacement(state.teacher, cell.date, row.slot, lesson)}>
                                       <strong class="viewer-lesson-title">{lesson.discipline}</strong>
                                     </button>
                                   {/each}
@@ -391,12 +420,31 @@
   </div>
 {/if}
 
+{#if activeLessonTooltip}
+  {@const item = activeLessonTooltip}
+  {@const lesson = item.lesson}
+  <div class="custom-tooltip sub-lesson-tooltip" style="left:-9999px;top:-9999px" use:positionSubTooltip={item.targetRect} role="tooltip">
+    <div class="tooltip-header">
+      <span class="tooltip-time">{formatDate(item.date, { weekday: 'short', day: 'numeric', month: 'short' })} · {item.slot.number} пара ({item.slot.start}–{item.slot.end})</span>
+      <span class="tooltip-badge status-selected">{item.teacher.label}</span>
+    </div>
+    <div class="tooltip-body"><div class="tooltip-section"><div class="tooltip-entity-card card-busy">
+      <div class="entity-head"><strong class="entity-title">{lesson.discipline}</strong>{#if lesson.kindOfWork}<span class="entity-badge">{lesson.kindOfWork}</span>{/if}</div>
+      <div class="entity-desc"><div class="tooltip-meta-stack">
+        {#if lesson.group}<div class="tooltip-meta-line"><span class="party-label">Группа:</span><strong>{lesson.group}{#if lesson.subgroup} (подгр. {lesson.subgroup}){/if}</strong></div>{/if}
+        {#if lesson.auditorium}<div class="tooltip-meta-line"><span class="party-label">Аудитория:</span><strong>ауд. {lesson.auditorium}{#if lesson.building} ({lesson.building}){/if}</strong></div>{/if}
+        {#if lesson.lecturer}<div class="tooltip-meta-line"><span class="party-label">Преподаватель:</span><strong>{lesson.lecturer}</strong></div>{/if}
+      </div></div>
+    </div></div></div>
+  </div>
+{/if}
+
 <style>
   .substitution-workspace{max-width:1600px}
   .substitution-controls{display:grid;grid-template-columns:minmax(280px,1.5fr) minmax(155px,.7fr) minmax(155px,.7fr) auto;align-items:end;gap:12px;background:#fff;border:1px solid #e4eae3;border-radius:9px;padding:12px 14px;margin:0 0 14px}
   .sub-filter{display:flex;flex-direction:column;gap:5px;min-width:0}.sub-filter label,.sub-filter-label{font-size:10px;font-weight:700;color:#718279}.sub-filter input{height:36px;min-width:0;border:1px solid #dce5de;border-radius:6px;background:#fbfdfb;padding:0 9px;color:#25463a;font:inherit;font-size:11px}.department-value{height:36px;display:flex;align-items:center;padding:0 10px;border:1px solid #dce5de;border-radius:6px;background:#f5f8f4;color:#25463a;font-size:11px;font-weight:700}.sub-load-button{height:36px;padding:0 13px;white-space:nowrap;font-size:10px}
-  .substitution-legend{display:flex;align-items:center;flex-wrap:wrap;gap:9px 20px;padding:0 2px;margin:0 0 15px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}
-  .sub-week .table-scroll{max-height:72vh}.sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr))}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.substitution-lesson-button{display:flex;align-items:baseline;gap:5px;width:100%;min-width:0;overflow:hidden;border:0;border-radius:3px;background:transparent;padding:0;text-align:left;color:#344d40;font:inherit}.substitution-lesson-button:hover .viewer-lesson-title,.substitution-lesson-button:focus-visible .viewer-lesson-title{color:#287454;text-decoration:underline}.substitution-lesson-button .viewer-lesson-title{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:normal;font-size:10px}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
+  .substitution-legend{display:flex;align-items:center;flex-wrap:wrap;gap:9px 20px;padding:0 2px;margin:0 0 15px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-active-toggle{margin-left:auto;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font:inherit;font-size:10px;font-weight:800;white-space:nowrap}.sub-active-toggle.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-lesson-tooltip{z-index:1200;min-width:260px}
+  .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr))}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.substitution-lesson-button{display:flex;align-items:baseline;gap:5px;width:100%;min-width:0;overflow:hidden;border:0;border-radius:3px;background:transparent;padding:0;text-align:left;color:#344d40;font:inherit}.substitution-lesson-button:hover .viewer-lesson-title,.substitution-lesson-button:focus-visible .viewer-lesson-title{color:#287454;text-decoration:underline}.substitution-lesson-button .viewer-lesson-title{display:block;flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;word-break:normal;font-size:10px}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px;max-height:300px;overflow:auto}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
   @media(max-width:900px){.substitution-controls{grid-template-columns:minmax(180px,1.3fr) 1fr 1fr}.sub-load-button{grid-column:3;justify-self:stretch;justify-content:center}}
