@@ -137,9 +137,7 @@
     entity: ScheduleViewerEntity;
     slot: Slot;
     date: string;
-    x: number;
-    y: number;
-    placement: 'top' | 'bottom';
+    targetRect: DOMRect;
   };
 
   let activeViewerTooltip: ActiveViewerTooltip | null = null;
@@ -147,11 +145,8 @@
   function showViewerTooltip(lesson: ViewerLessonDetail, entity: ScheduleViewerEntity, slot: Slot, date: string, event: MouseEvent | FocusEvent) {
     const target = event.currentTarget as HTMLElement | null;
     if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const placement: 'top' | 'bottom' = rect.top > 250 ? 'top' : 'bottom';
-    const x = Math.max(170, Math.min(window.innerWidth - 170, rect.left + rect.width / 2));
-    const y = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
-    activeViewerTooltip = { lesson, entity, slot, date, x, y, placement };
+    const targetRect = target.getBoundingClientRect();
+    activeViewerTooltip = { lesson, entity, slot, date, targetRect };
   }
 
   function hideViewerTooltip() {
@@ -314,6 +309,14 @@
 
   onMount(() => {
     ensureBuildings();
+    const handleScroll = () => {
+      hideTooltip();
+      hideViewerTooltip();
+    };
+    window.addEventListener('scroll', handleScroll, { capture: true, passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll, true);
+    };
   });
 
   async function onSidebarBuildingChange() {
@@ -714,9 +717,7 @@
   type ActiveTooltip = {
     cell: Cell;
     slot: Slot;
-    x: number;
-    y: number;
-    placement: 'top' | 'bottom';
+    targetRect: DOMRect;
   };
 
   let activeTooltip: ActiveTooltip | null = null;
@@ -725,15 +726,91 @@
     if (displayMode === 'classic') return;
     const target = event.currentTarget as HTMLElement | null;
     if (!target) return;
-    const rect = target.getBoundingClientRect();
-    const placement: 'top' | 'bottom' = rect.top > 230 ? 'top' : 'bottom';
-    const x = Math.max(160, Math.min(window.innerWidth - 160, rect.left + rect.width / 2));
-    const y = placement === 'top' ? rect.top - 8 : rect.bottom + 8;
-    activeTooltip = { cell, slot, x, y, placement };
+    const targetRect = target.getBoundingClientRect();
+    activeTooltip = { cell, slot, targetRect };
   }
 
   function hideTooltip() {
     activeTooltip = null;
+  }
+
+  function fitTooltip(node: HTMLElement, targetRect: DOMRect | null) {
+    let ro: ResizeObserver | null = null;
+
+    function position(rect: DOMRect | null) {
+      if (!rect) return;
+      const vw = window.innerWidth;
+      const vh = window.innerHeight;
+      const pad = 12;
+      const gap = 8;
+
+      const maxW = Math.min(390, Math.max(200, vw - pad * 2));
+      node.style.maxWidth = `${maxW}px`;
+      node.style.maxHeight = 'none';
+      node.style.overflowY = 'visible';
+
+      const tooltipWidth = node.offsetWidth;
+      let tooltipHeight = node.offsetHeight;
+
+      const targetCenterX = rect.left + rect.width / 2;
+      const idealLeft = targetCenterX - tooltipWidth / 2;
+      const left = Math.max(pad, Math.min(vw - pad - tooltipWidth, idealLeft));
+
+      const spaceAbove = rect.top - pad - gap;
+      const spaceBelow = vh - rect.bottom - pad - gap;
+
+      let top: number;
+      let placement: 'top' | 'bottom';
+
+      if (spaceAbove >= tooltipHeight) {
+        placement = 'top';
+        top = rect.top - gap - tooltipHeight;
+      } else if (spaceBelow >= tooltipHeight) {
+        placement = 'bottom';
+        top = rect.bottom + gap;
+      } else if (spaceAbove >= spaceBelow) {
+        placement = 'top';
+        const availableHeight = Math.max(100, spaceAbove);
+        node.style.maxHeight = `${availableHeight}px`;
+        node.style.overflowY = 'auto';
+        top = rect.top - gap - node.offsetHeight;
+      } else {
+        placement = 'bottom';
+        const availableHeight = Math.max(100, spaceBelow);
+        node.style.maxHeight = `${availableHeight}px`;
+        node.style.overflowY = 'auto';
+        top = rect.bottom + gap;
+      }
+
+      const finalTop = Math.max(pad, Math.min(vh - pad - node.offsetHeight, top));
+      const finalLeft = Math.max(pad, Math.min(vw - pad - node.offsetWidth, left));
+
+      node.style.left = `${Math.round(finalLeft)}px`;
+      node.style.top = `${Math.round(finalTop)}px`;
+      node.classList.toggle('tooltip-top', placement === 'top');
+      node.classList.toggle('tooltip-bottom', placement === 'bottom');
+    }
+
+    position(targetRect);
+
+    const onResize = () => position(targetRect);
+    window.addEventListener('resize', onResize);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => position(targetRect));
+      ro.observe(node);
+    }
+
+    return {
+      update(newRect: DOMRect | null) {
+        targetRect = newRect;
+        position(targetRect);
+      },
+      destroy() {
+        window.removeEventListener('resize', onResize);
+        ro?.disconnect();
+      }
+    };
   }
 </script>
 
@@ -1419,8 +1496,9 @@
     {@const cell = activeTooltip.cell}
     {@const slot = activeTooltip.slot}
     <div
-      class="custom-tooltip tooltip-{activeTooltip.placement}"
-      style="left: {activeTooltip.x}px; top: {activeTooltip.y}px;"
+      class="custom-tooltip"
+      style="left: -9999px; top: -9999px;"
+      use:fitTooltip={activeTooltip.targetRect}
       role="tooltip"
     >
       <div class="tooltip-header">
@@ -1643,8 +1721,9 @@
     {@const item = activeViewerTooltip}
     {@const lesson = item.lesson}
     <div
-      class="custom-tooltip tooltip-{item.placement}"
-      style="left: {item.x}px; top: {item.y}px;"
+      class="custom-tooltip"
+      style="left: -9999px; top: -9999px;"
+      use:fitTooltip={item.targetRect}
       role="tooltip"
     >
       <div class="tooltip-header">
