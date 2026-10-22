@@ -1081,19 +1081,19 @@
                     type="button"
                     class:active={displayMode === 'windows'}
                     aria-pressed={displayMode === 'windows'}
-                    title="Цветные статусы окон, мини-чипы и подробная карточка при наведении"
+                    title="Цветом показаны окна преподавателя и группы; наведите на слот для подробностей"
                     on:click={() => setDisplayMode('windows')}
                   >
-                    С окнами
+                    Статусы окон
                   </button>
                   <button
                     type="button"
                     class:active={displayMode === 'classic'}
                     aria-pressed={displayMode === 'classic'}
-                    title="Упрощённый классический вид как в основной версии: без цветных окон и карточек"
+                    title="Обычный вид расписания без цветовых статусов окон и карточек"
                     on:click={() => setDisplayMode('classic')}
                   >
-                    Классический
+                    Обычный вид
                   </button>
                 </div>
                 {#if hasGenerated}
