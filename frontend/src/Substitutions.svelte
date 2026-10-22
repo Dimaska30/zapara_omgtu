@@ -31,6 +31,8 @@
   type SelectedLesson = { teacher: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
   type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number };
   type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
+  type ConfirmedReplacement = { key: string; originalTeacher: SearchItem; replacement: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
+  const CONFIRMED_REPLACEMENTS_KEY = 'zapara-confirmed-substitutions-v1';
 
   function mondayOf(date: Date) {
     const monday = new Date(date);
@@ -60,6 +62,9 @@
   let hasLoaded = false;
   let selectedLesson: SelectedLesson | null = null;
   let pickedReplacement: SearchItem | null = null;
+  let confirmedReplacements: ConfirmedReplacement[] = [];
+  let showConfirmedReplacements = false;
+  let boardNotice = '';
   let candidateMode: 'department' | 'topic' | 'other' = 'department';
   let topicId = '';
   let selectedOthers: SearchItem[] = [];
@@ -346,21 +351,57 @@
     return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? `Окно (${formatPairCount(windowPairs)})` : status === 'no-lessons' ? 'нет пар сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
   }
 
-  function confirmReplacement(candidate: Candidate) {
+  function selectReplacement(candidate: Candidate) {
     if (candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons') return;
     pickedReplacement = candidate.person;
-    notice = `${candidate.person.label} выбран(а) как замена на ${formatDate(selectedLesson!.date)}, ${selectedLesson!.slot.start}–${selectedLesson!.slot.end}.`;
+    notice = `${candidate.person.label} выбрано. Подтвердите замену кнопкой ниже.`;
+  }
+
+  function persistConfirmedReplacements(items: ConfirmedReplacement[]) {
+    confirmedReplacements = items;
+    try { localStorage.setItem(CONFIRMED_REPLACEMENTS_KEY, JSON.stringify(items)); return true; }
+    catch { boardNotice = 'Не удалось сохранить список замен в этом браузере.'; return false; }
+  }
+
+  function saveConfirmedReplacement() {
+    if (!selectedLesson || !pickedReplacement) return;
+    const selection = selectedLesson;
+    const lessonId = String(selection.lesson.rawEvent.lessonOid ?? `${selection.lesson.discipline}:${selection.lesson.group ?? ''}:${selection.lesson.subgroup ?? ''}`);
+    const key = `${selection.teacher.id}:${selection.date}:${selection.slot.number}:${lessonId}`;
+    const entry: ConfirmedReplacement = {
+      key,
+      originalTeacher: selection.teacher,
+      replacement: pickedReplacement,
+      date: selection.date,
+      slot: selection.slot,
+      lesson: selection.lesson
+    };
+    const saved = persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
+    if (saved) boardNotice = `Замена подтверждена: ${selection.teacher.label} → ${pickedReplacement.label}, ${formatDate(selection.date)}.`;
+    selectedLesson = null;
+    pickedReplacement = null;
+  }
+
+  function removeConfirmedReplacement(key: string) {
+    persistConfirmedReplacements(confirmedReplacements.filter((item) => item.key !== key));
   }
 
   onMount(() => {
     const updateCurrentDate = () => { currentDateIso = toIso(new Date()); };
     const currentDateTimer = window.setInterval(updateCurrentDate, 60_000);
+    try {
+      const saved = JSON.parse(localStorage.getItem(CONFIRMED_REPLACEMENTS_KEY) ?? '[]');
+      if (Array.isArray(saved)) confirmedReplacements = saved.filter((item) => item && typeof item.key === 'string' && item.originalTeacher?.label && item.replacement?.label && item.lesson && item.slot && item.date);
+    } catch { confirmedReplacements = []; }
     void refreshBoard();
     return () => window.clearInterval(currentDateTimer);
   });
 </script>
 
 <PlannerPageFrame section="ПЛАНИРОВАНИЕ" sectionNumber="03" breadcrumb="Замены" title="Замены занятий" description="Найдите занятие на кафедре и подберите свободного коллегу для замены" icon="⇄" on:home>
+  <button slot="headingAction" class="confirmed-replacements-trigger" type="button" on:click={() => showConfirmedReplacements = true}>
+    <span aria-hidden="true">✓</span> Подтверждённые замены <b>{confirmedReplacements.length}</b>
+  </button>
   <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания замен">
     <div class="sub-filter department-filter"><span class="sub-filter-label">Кафедра</span><span class="department-value">ПМФИ</span></div>
     <div class="sub-filter"><label for="sub-start">Период с</label><input id="sub-start" type="date" bind:value={start} /></div>
@@ -388,6 +429,7 @@
       </div>
     </div>
   </PlannerToolbar>
+  {#if boardNotice}<p class="sub-board-notice" role="status">{boardNotice}</p>{/if}
   {#if failedTeacherIds.size}
     <p class="warning-note">Не удалось загрузить расписание {failedTeacherIds.size} преподавателей. Их строки оставлены в таблице с отметкой «Нет данных».</p>
   {/if}
@@ -464,7 +506,7 @@
       {#if candidateMode === 'department'}
         <div class="sub-candidate-list">
           {#each departmentCandidates as candidate (candidate.person.id)}
-            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status === 'busy' || candidate.status === 'error' || candidate.status === 'loading'} on:click={() => confirmReplacement(candidate)}>
+            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status === 'busy' || candidate.status === 'error' || candidate.status === 'loading'} on:click={() => selectReplacement(candidate)}>
               <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}<p class="field-hint">Кроме заменяемого преподавателя на кафедре больше никого нет.</p>{/each}
@@ -474,7 +516,7 @@
         {#if topicLoading}<p class="sub-loading-note">Проверяю расписание участников группы…</p>{/if}
         <div class="sub-candidate-list">
           {#each topicCandidates as candidate (candidate.person.id)}
-            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => confirmReplacement(candidate)}>
+            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => selectReplacement(candidate)}>
               <span><strong>{candidate.person.label}</strong></span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}{#if topicId && !topicLoading}<p class="field-hint">В этой группе нет других участников.</p>{/if}{/each}
@@ -484,7 +526,7 @@
         {#if otherLoading}<p class="sub-loading-note">Проверяю расписание…</p>{/if}
         <div class="sub-candidate-list">
           {#each otherCandidates as candidate (candidate.person.id)}
-            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => confirmReplacement(candidate)}>
+            <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => selectReplacement(candidate)}>
               <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
             </button>
           {/each}
@@ -492,6 +534,35 @@
       {/if}
       {#if notice}<p class="sub-notice" role="status">{notice}</p>{/if}
       <p class="sub-modal-footnote">Зелёный — свободен без окон · жёлтый — свободен в окно · красный — сегодня нет пар. Выбор помогает согласовать замену и не меняет исходное расписание.</p>
+      <div class="sub-confirm-bar">
+        <div>{#if pickedReplacement}<span>Замена для</span><strong>{selectedLesson.teacher.label} → {pickedReplacement.label}</strong>{:else}<span>Сначала выберите свободного преподавателя</span>{/if}</div>
+        <button type="button" class="primary-button" disabled={!pickedReplacement} on:click={saveConfirmedReplacement}>Подтвердить замену</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+{#if showConfirmedReplacements}
+  <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) showConfirmedReplacements = false; }} on:keydown={(event) => event.key === 'Escape' && (showConfirmedReplacements = false)}>
+    <div class="sub-modal confirmed-replacements-modal" role="dialog" aria-modal="true" aria-labelledby="confirmed-replacements-title">
+      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => showConfirmedReplacements = false}>×</button>
+      <span class="section-kicker">ЗАМЕНЫ · СПИСОК</span>
+      <h2 id="confirmed-replacements-title">Подтверждённые замены</h2>
+      <p class="sub-modal-context">Список сохраняется в этом браузере и доступен при следующем открытии раздела.</p>
+      {#if confirmedReplacements.length}
+        <div class="confirmed-replacements-list">
+          {#each [...confirmedReplacements].sort((a, b) => a.date.localeCompare(b.date) || a.slot.number - b.slot.number) as item (item.key)}
+            <article class="confirmed-replacement-card">
+              <div class="confirmed-replacement-date"><strong>{formatDate(item.date, { weekday: 'short', day: 'numeric', month: 'long' })}</strong><span>{item.slot.number} пара · {item.slot.start}–{item.slot.end}</span></div>
+              <div class="confirmed-replacement-detail"><span>{item.lesson.discipline}{#if item.lesson.group} · {item.lesson.group}{#if item.lesson.subgroup} / подгр. {item.lesson.subgroup}{/if}{/if}</span><strong><small>Вместо:</small> {item.originalTeacher.label} <i>→</i> <small>замещает:</small> {item.replacement.label}</strong></div>
+              <button type="button" aria-label={`Удалить замену ${item.originalTeacher.label} на ${item.replacement.label}`} on:click={() => removeConfirmedReplacement(item.key)}>×</button>
+            </article>
+          {/each}
+        </div>
+      {:else}
+        <div class="confirmed-replacements-empty"><span aria-hidden="true">↗</span><strong>Пока нет подтверждённых замен</strong><p>Выберите занятие в таблице, затем отметьте преподавателя и подтвердите замену.</p></div>
+      {/if}
+      {#if confirmedReplacements.length}<button type="button" class="confirmed-replacements-clear" on:click={() => persistConfirmedReplacements([])}>Очистить список</button>{/if}
     </div>
   </div>
 {/if}
@@ -521,6 +592,10 @@
   .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
+  .confirmed-replacements-trigger{display:inline-flex;align-items:center;gap:8px;border:1px solid #d6e8da;border-radius:8px;background:#eef6ef;color:#2d6d54;padding:8px 11px;font-size:10px;font-weight:800}.confirmed-replacements-trigger>span{font-size:14px}.confirmed-replacements-trigger b{display:grid;place-items:center;min-width:19px;height:19px;border-radius:20px;background:#d6edda;color:#2b684b;padding:0 5px;font-size:9px}
+  .sub-board-notice{margin:0 0 12px;padding:9px 12px;border:1px solid #cfe6d3;border-radius:7px;background:#eef7f0;color:#28623c;font-size:11px}
+  .sub-confirm-bar{position:sticky;bottom:-26px;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.sub-confirm-bar>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.sub-confirm-bar strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.sub-confirm-bar .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}.sub-confirm-bar .primary-button:disabled{opacity:.7}
+  .confirmed-replacements-modal{max-width:720px}.confirmed-replacements-list{display:flex;flex-direction:column;gap:8px;max-height:min(54vh,500px);overflow:auto}.confirmed-replacement-card{display:grid;grid-template-columns:minmax(125px,.75fr) minmax(0,2fr) 28px;align-items:center;gap:12px;padding:12px;border:1px solid #dfe9e1;border-radius:9px;background:#fbfdfb}.confirmed-replacement-date,.confirmed-replacement-detail{display:flex;flex-direction:column;gap:4px;min-width:0}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{color:#315946;font-size:10px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{color:#7d8e83;font-size:9px;line-height:1.4}.confirmed-replacement-detail strong{overflow-wrap:anywhere}.confirmed-replacement-detail i{color:#81ad92;font-style:normal;padding:0 3px}.confirmed-replacement-card>button{width:27px;height:27px;border:0;border-radius:6px;background:#f5e9e7;color:#a45b55;font-size:18px}.confirmed-replacements-empty{display:grid;justify-items:center;gap:8px;padding:35px 20px;border:1px dashed #dce8de;border-radius:9px;background:#fbfdfb;text-align:center}.confirmed-replacements-empty>span{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#eaf4ed;color:#579374;font-size:20px}.confirmed-replacements-empty strong{color:#385e49;font-size:12px}.confirmed-replacements-empty p{max-width:340px;margin:0;color:#819187;font-size:10px;line-height:1.6}.confirmed-replacements-clear{display:block;margin:13px 0 0 auto;border:0;background:transparent;color:#a45b55;font-size:10px;font-weight:800}
   @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column}.sub-detail-options{margin-left:0;justify-content:flex-start}}
-  @media(max-width:560px){.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
+  @media(max-width:560px){.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}.sub-confirm-bar{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.sub-confirm-bar .primary-button{width:100%;justify-content:center}.confirmed-replacement-card{grid-template-columns:minmax(0,1fr) 28px}.confirmed-replacement-date{grid-column:1}.confirmed-replacement-detail{grid-column:1;grid-row:2}.confirmed-replacement-card>button{grid-column:2;grid-row:1 / span 2}}
 </style>

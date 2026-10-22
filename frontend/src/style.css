@@ -2084,6 +2084,10 @@ select:focus,
   gap: 6px;
 }
 
+.workspace-heading-action {
+  margin-bottom: 12px;
+}
+
 /* Gently mark today's column in every weekly schedule table. */
 .schedule-table .table-head > div.today-column {
   background-color: #edf5ef;

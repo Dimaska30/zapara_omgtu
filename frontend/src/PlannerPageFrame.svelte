@@ -18,6 +18,7 @@
   </div>
   <section class="workspace-heading">
     <div>
+      {#if $$slots.headingAction}<div class="workspace-heading-action"><slot name="headingAction" /></div>{/if}
       <span class="section-kicker">{section} / {sectionNumber}</span>
       <h1>{title}<span class="heading-period">.</span></h1>
       <p>{description}</p>
