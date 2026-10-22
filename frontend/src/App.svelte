@@ -927,6 +927,7 @@
               {#if groups.length}<div class="group-chips">{#each groups as group (group.id)}<span class="group-chip">{group.label}<button type="button" on:click={() => removeGroup(group.id)} aria-label={`Удалить группу ${group.label}`}>×</button></span>{/each}</div>{:else}<p class="field-hint">Можно добавить любое количество групп</p>{/if}
             </div>{/if}
 
+            {#if page !== 'substitutions' && page !== 'meetings'}
             <div class="field-block auditorium-field-block">
               <div class="field-head">
                 <label>Аудитории <small class="field-optional">(опционально)</small></label>
@@ -1060,6 +1061,7 @@
                 {/if}
               </div>
             </div>
+            {/if}
 
             <div class="field-block date-block"><div class="field-head"><label>Период</label><span>{periodStepNumber}</span></div><div class="date-fields"><div><label for="start-date">С</label><input id="start-date" type="date" value={start} on:change={(event) => changeStart((event.currentTarget as HTMLInputElement).value)} /></div><div><label for="end-date">ПО</label><input id="end-date" type="date" min={start} value={finish} on:change={(event) => changeFinish((event.currentTarget as HTMLInputElement).value)} /></div></div></div>
             {#if start && finish && start > finish}<p class="form-error">Дата окончания раньше даты начала.</p>{/if}
@@ -1176,7 +1178,7 @@
               <span class="selection-arrow-icon">↗</span>
             {/if}
           </button>
-          {#if selectedCount}
+          {#if selectedCount && page !== 'meetings'}
             <div class="selection-actions">
               <button type="button" class="btn-aud-finder" on:click={() => openAuditoriumModal('all')}>
                 <span>Подобрать аудиторию</span>
