@@ -1120,13 +1120,17 @@
                   {/if}
                 {:else}
                   <span><i class="legend-dot window-none"></i>Без окон</span>
+                  {#if page !== 'meetings'}
                   <span><i class="legend-dot window-group"></i>{groups.length > 1 ? 'Окно у групп' : 'Окно у группы'}</span>
+                  {/if}
                   <span><i class="legend-dot window-teacher"></i>Окно у преподавателя</span>
+                  {#if page !== 'meetings'}
                   <span><i class="legend-dot window-both"></i>Окно и у преподавателя, и у {groups.length > 1 ? 'групп' : 'группы'}</span>
+                  <span><span class="legend-border-sample group"></span> {groups.length > 1 ? 'День без пар у групп' : 'День без пар у группы'}</span>
+                  {/if}
                   <span><i class="legend-dot selected"></i>Выбрано</span>
                   <span><i class="legend-dot unavailable"></i>Занято</span>
                   <span><span class="legend-border-sample teacher"></span> День без пар у преп.</span>
-                  <span><span class="legend-border-sample group"></span> {groups.length > 1 ? 'День без пар у групп' : 'День без пар у группы'}</span>
                   {#if page === 'retakes' && retakeMode === 'commission'}
                     <span>Комиссия указана справочно под слотом</span>
                   {/if}
