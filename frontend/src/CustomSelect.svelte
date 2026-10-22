@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createEventDispatcher, onMount, onDestroy } from 'svelte';
+  import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
 
   export let value: any = null;
   export let options: { value: any; label: string; extra?: string }[] = [];
@@ -14,13 +14,29 @@
 
   let isOpen = false;
   let rootEl: HTMLElement;
+  let dropUp = false;
+  let dropMaxHeight = 240;
 
   $: selectedOption = options.find((o) => o.value === value);
   $: displayLabel = selectedOption ? selectedOption.label : placeholder;
 
-  function toggle() {
+  async function toggle() {
     if (disabled) return;
     isOpen = !isOpen;
+    if (isOpen) {
+      await tick();
+      updateDropdownPlacement();
+    }
+  }
+
+  function updateDropdownPlacement() {
+    if (!rootEl) return;
+    const bounds = rootEl.closest('.sub-modal')?.getBoundingClientRect() ?? { top: 0, bottom: window.innerHeight };
+    const trigger = rootEl.getBoundingClientRect();
+    const above = Math.max(0, trigger.top - bounds.top - 12);
+    const below = Math.max(0, bounds.bottom - trigger.bottom - 12);
+    dropUp = below < 240 && above > below;
+    dropMaxHeight = Math.max(96, Math.min(240, (dropUp ? above : below) - 8));
   }
 
   function selectOption(optVal: any) {
@@ -100,7 +116,7 @@
   </button>
 
   {#if isOpen}
-    <div class="custom-select-dropdown" role="listbox" aria-label={ariaLabel || 'Варианты'}>
+    <div class="custom-select-dropdown" class:drop-up={dropUp} style={`--dropdown-max-height:${dropMaxHeight}px`} role="listbox" aria-label={ariaLabel || 'Варианты'}>
       <ul class="custom-select-options">
         {#if options.length === 0}
           <li class="custom-select-empty">
@@ -211,10 +227,14 @@
     border-radius: 8px;
     box-shadow: 0 10px 28px rgba(20, 50, 36, 0.14), 0 2px 6px rgba(0, 0, 0, 0.04);
     z-index: 1000;
-    max-height: 240px;
+    max-height: var(--dropdown-max-height, 240px);
     overflow-y: auto;
     padding: 4px;
     animation: fadeIn .12s ease-out;
+  }
+  .custom-select-dropdown.drop-up {
+    top: auto;
+    bottom: calc(100% + 4px);
   }
   @keyframes fadeIn {
     from { opacity: 0; transform: translateY(-4px); }
