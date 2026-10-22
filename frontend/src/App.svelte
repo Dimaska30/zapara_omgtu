@@ -15,6 +15,7 @@
     buildWeeks,
     checkAuditoriumsAvailability,
     formatDate,
+    formatPairCount,
     formatLessonKindShort,
     formatShortName,
     getAuditoriums,
@@ -707,39 +708,24 @@
   function dateShort(value: string) { return formatDate(value, { day: '2-digit', month: '2-digit' }); }
   function freeCommission(cell: Cell) { return cell.commission.filter((entry) => entry.available).map((entry) => entry.person.label); }
   function commissionReason(reason: 'free' | 'busy' | 'no-lessons' | 'load-error') { return reason === 'free' ? (page === 'substitutions' ? 'может заменить' : 'может присутствовать') : reason === 'busy' ? 'занят в это время' : reason === 'no-lessons' ? 'нет пар в этот день' : 'расписание не загрузилось'; }
-  function windowStatusShort(status: WindowStatus) {
-    if (page === 'meetings') {
-      if (status === 'teacher-window') return 'Окно у преп.';
-      if (status === 'both-window') return 'Окно у всех';
-      return 'Без окон';
-    }
-    if (status === 'group-window') return groups.length > 1 ? 'Окно у групп' : 'Окно у группы';
-    if (status === 'teacher-window') return 'Окно у преп.';
-    if (status === 'both-window') return groups.length > 1 ? 'Окно у преп. и групп' : 'Окно у преп. и группы';
-    return 'Без окон';
+  function windowStatusShort(status: WindowStatus, windowPairs = 0) {
+    return status === 'none' ? 'Без окон' : `Окно (${formatPairCount(windowPairs)})`;
   }
   function windowStatusFull(cell: Cell) {
     if (page === 'meetings') {
-      const teachersWithWindow = cell.teachersDetails?.filter((t) => t.hasWindow).map((t) => t.person.label) ?? [];
+      const teachersWithWindow = cell.teachersDetails?.filter((t) => t.hasWindow).map((t) => `${t.person.label} (${formatPairCount(t.windowPairs)})`) ?? [];
       if (teachersWithWindow.length === 0) return 'без окон';
-      if (teachersWithWindow.length === (cell.teachersDetails?.length ?? 0)) return 'окно у всех преподавателей';
+      if (teachersWithWindow.length === (cell.teachersDetails?.length ?? 0)) return `окно у всех преподавателей: ${teachersWithWindow.join(', ')}`;
       return `окно у: ${teachersWithWindow.join(', ')}`;
     }
+    const groupsWithWindow = cell.groupsDetails.filter((group) => !group.busy && group.hasWindow).map((group) => `${group.group.label} (${formatPairCount(group.windowPairs)})`);
+    const teacherWindow = cell.teacherHasWindow ? `преподавателя (${formatPairCount(cell.teacherWindowPairs)})` : '';
     if (cell.windowStatus === 'group-window') {
-      if (cell.freeGroupsWithWindow && cell.freeGroupsWithWindow.length > 0 && cell.freeGroups.length > 1) {
-        if (cell.freeGroupsWithWindow.length === cell.freeGroups.length) {
-          return 'окно у всех групп';
-        }
-        return `окно у ${cell.freeGroupsWithWindow.join(', ')}`;
-      }
-      return groups.length > 1 ? 'окно у групп' : 'окно у группы';
+      return groupsWithWindow.length ? `окно у ${groupsWithWindow.join(', ')}` : `окно у групп (${formatPairCount(cell.windowPairs)})`;
     }
-    if (cell.windowStatus === 'teacher-window') return 'окно у преподавателя';
+    if (cell.windowStatus === 'teacher-window') return `окно у ${teacherWindow}`;
     if (cell.windowStatus === 'both-window') {
-      if (cell.freeGroupsWithWindow && cell.freeGroupsWithWindow.length > 0 && cell.freeGroups.length > 1) {
-        return `окно и у преподавателя, и у ${cell.freeGroupsWithWindow.join(', ')}`;
-      }
-      return groups.length > 1 ? 'окно и у преподавателя, и у групп' : 'окно и у преподавателя, и у группы';
+      return `окно у ${[teacherWindow, ...groupsWithWindow].filter(Boolean).join(', ')}`;
     }
     return 'без окон';
   }
@@ -1226,7 +1212,7 @@
                     {#each week.rows as row, rowIndex}<div class="table-row" role="row"><div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                       {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
                         {#if selected.has(cell.key) && slotAssignedAuditoriums.has(cell.key)}<span class="cell-assigned-aud-chip">Ауд. {slotAssignedAuditoriums.get(cell.key)?.name}</span>{/if}
-                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={t.person.label}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={detail.group.label}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
+                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={`${t.person.label}${t.hasWindow ? `: Окно (${formatPairCount(t.windowPairs)})` : ''}`}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={`${detail.group.label}${detail.hasWindow ? `: Окно (${formatPairCount(detail.windowPairs)})` : ''}`}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
                         {#if (uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{uiPage === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
                       </button>
                       {#if (uiPage === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
@@ -1507,9 +1493,9 @@
           {:else if selected.has(cell.key)}
             Выбрано
           {:else if cell.windowStatus === 'both-window'}
-            {page === 'meetings' ? 'Окно у всех' : (groups.length > 1 ? 'Окно и у преподавателя, и у групп' : 'Окно и у преподавателя, и у группы')}
+            {windowStatusShort(cell.windowStatus, cell.windowPairs)}
           {:else}
-            {windowStatusShort(cell.windowStatus)}
+            {windowStatusShort(cell.windowStatus, cell.windowPairs)}
           {/if}
         </span>
       </div>
@@ -1528,7 +1514,7 @@
                   <div class="tooltip-entity-card" class:card-free={t.available && !t.hasWindow && !t.noLessons} class:card-teacher-window={t.available && t.hasWindow && !t.noLessons} class:card-no-lessons={t.noLessons} class:card-busy={!t.available && !t.noLessons}>
                     <div class="entity-head">
                       <strong class="entity-title">{t.person.label}</strong>
-                      <span class="entity-badge">{t.noLessons ? 'нет пар' : !t.available ? 'занят' : t.hasWindow ? 'окно' : 'без окон'}</span>
+                      <span class="entity-badge">{t.noLessons ? 'нет пар' : !t.available ? 'занят' : t.hasWindow ? `Окно (${formatPairCount(t.windowPairs)})` : 'без окон'}</span>
                     </div>
                     <div class="entity-desc">
                       {#if t.noLessons}
@@ -1554,7 +1540,7 @@
                           <span>{commissionReason(t.reason)}</span>
                         {/if}
                       {:else if t.hasWindow}
-                        <span>Свободен (окно перед этой парой)</span>
+                        <span>Свободен, окно: {formatPairCount(t.windowPairs)}</span>
                       {:else}
                         <span>Свободен (пара без окон)</span>
                       {/if}
@@ -1595,7 +1581,7 @@
             <div class="tooltip-entity-card" class:card-free={!cell.teacherBusy && !cell.teacherHasWindow} class:card-teacher-window={!cell.teacherBusy && cell.teacherHasWindow} class:card-busy={cell.teacherBusy}>
               <div class="entity-head">
                 <strong class="entity-title">{teacher ? teacher.label : 'Преподаватель'}</strong>
-                <span class="entity-badge">{cell.teacherBusy ? 'занят' : cell.teacherHasWindow ? 'окно' : 'без окон'}</span>
+                <span class="entity-badge">{cell.teacherBusy ? 'занят' : cell.teacherHasWindow ? `Окно (${formatPairCount(cell.teacherWindowPairs)})` : 'без окон'}</span>
               </div>
               <div class="entity-desc">
                 {#if cell.teacherBusy}
@@ -1619,7 +1605,7 @@
                     <span class="entity-lesson">Занятие</span>
                   {/if}
                 {:else if cell.teacherHasWindow}
-                  <span>Свободен (окно перед этой парой)</span>
+                  <span>Свободен, окно: {formatPairCount(cell.teacherWindowPairs)}</span>
                 {:else}
                   <span>Свободен (пара без окон)</span>
                 {/if}
@@ -1635,7 +1621,7 @@
                   <div class="tooltip-entity-card" class:card-free={!detail.busy && !detail.hasWindow} class:card-group-window={!detail.busy && detail.hasWindow} class:card-busy={detail.busy}>
                     <div class="entity-head">
                       <strong class="entity-title">{detail.group.label}</strong>
-                      <span class="entity-badge">{detail.busy ? 'занята' : detail.hasWindow ? 'окно' : 'без окон'}</span>
+                      <span class="entity-badge">{detail.busy ? 'занята' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : 'без окон'}</span>
                     </div>
                     <div class="entity-desc">
                       {#if detail.busy}
@@ -1659,7 +1645,7 @@
                           <span class="entity-lesson">Занятие</span>
                         {/if}
                       {:else if detail.hasWindow}
-                        <span>Свободна (окно перед этой парой)</span>
+                        <span>Свободна, окно: {formatPairCount(detail.windowPairs)}</span>
                       {:else}
                         <span>Свободна (пара без окон)</span>
                       {/if}
@@ -2009,7 +1995,7 @@
                       <div class="selected-slot-tags">
                         {#if displayMode === 'windows' && item.cell.windowStatus !== 'none'}
                           <span class="slot-badge tag-{item.cell.windowStatus}">
-                            {windowStatusShort(item.cell.windowStatus)}
+                            {windowStatusShort(item.cell.windowStatus, item.cell.windowPairs)}
                           </span>
                         {/if}
                         {#if page === 'meetings'}

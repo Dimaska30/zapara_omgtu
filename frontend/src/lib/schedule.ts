@@ -53,6 +53,7 @@ export type GroupSlotDetail = {
   group: Group;
   busy: boolean;
   hasWindow: boolean;
+  windowPairs: number;
   lessons: string[];
   lessonDetails: LessonDetail[];
 };
@@ -61,6 +62,7 @@ export type TeacherSlotDetail = {
   person: SearchItem;
   busy: boolean;
   hasWindow: boolean;
+  windowPairs: number;
   noLessons: boolean;
   available: boolean;
   reason: 'free' | 'busy' | 'no-lessons' | 'load-error';
@@ -74,6 +76,8 @@ export type Cell = {
   available: boolean;
   teacherBusy: boolean;
   teacherHasWindow: boolean;
+  teacherWindowPairs: number;
+  windowPairs: number;
   freeGroups: Group[];
   busyGroups: Group[];
   groupsDetails: GroupSlotDetail[];
@@ -509,11 +513,21 @@ export function formatDate(iso: string, options: Intl.DateTimeFormatOptions = { 
   return new Intl.DateTimeFormat('ru-RU', options).format(fromIso(iso));
 }
 
-export function hasWindowBefore(busySlots: number[], slotNumber: number): boolean {
-  const earlier = busySlots.filter((s) => s < slotNumber);
-  if (earlier.length === 0) return false;
-  const last = Math.max(...earlier);
-  return last < slotNumber - 1;
+export function countWindowPairsIfOccupied(busySlots: number[], slotNumber: number): number {
+  const projectedSlots = [...new Set([...busySlots, slotNumber])].sort((a, b) => a - b);
+  return projectedSlots.reduce((count, slot, index) => index > 0 ? count + Math.max(0, slot - projectedSlots[index - 1] - 1) : count, 0);
+}
+
+export function hasWindowIfOccupied(busySlots: number[], slotNumber: number): boolean {
+  return countWindowPairsIfOccupied(busySlots, slotNumber) > 0;
+}
+
+export function formatPairCount(count: number): string {
+  const absCount = Math.abs(count);
+  const lastTwo = absCount % 100;
+  const last = absCount % 10;
+  const noun = lastTwo >= 11 && lastTwo <= 14 ? 'пар' : last === 1 ? 'пара' : last >= 2 && last <= 4 ? 'пары' : 'пар';
+  return `${count} ${noun}`;
 }
 
 export function buildWeeks(
@@ -647,18 +661,20 @@ export function buildWeeks(
           const lessons = [...new Set(lessonDetails.map((l) => l.label))];
           const teacherBusySlots = SLOTS.filter((s) => isBusy(teacherDailyEvents, s)).map((s) => s.number);
           const teacherBusyWithSelected = [...new Set([...teacherBusySlots, ...selectedSlotsOnDate])];
-          const teacherHasWindow = hasWindowBefore(teacherBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+          const teacherHasWindow = hasWindowIfOccupied(teacherBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+          const teacherWindowPairs = countWindowPairsIfOccupied(teacherBusyWithSelected.filter((s) => s !== slot.number), slot.number);
 
           const groupStatus: GroupSlotDetail[] = groups.map((group) => {
             const dailyEvents = indexedGroups.get(group.id)?.byDate.get(date) ?? [];
             const busy = isBusy(dailyEvents, slot);
             const busySlots = SLOTS.filter((s) => isBusy(dailyEvents, s)).map((s) => s.number);
             const groupBusyWithSelected = [...new Set([...busySlots, ...selectedSlotsOnDate.filter((sNum) => !isBusy(dailyEvents, SLOTS[sNum - 1]))])];
-            const hasWindow = hasWindowBefore(groupBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+            const hasWindow = hasWindowIfOccupied(groupBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+            const windowPairs = countWindowPairsIfOccupied(groupBusyWithSelected.filter((s) => s !== slot.number), slot.number);
             const groupSlotLessons = slotEvents(dailyEvents, slot);
             const groupLessonDetails = groupSlotLessons.map(extractLessonDetail);
             const lessons = [...new Set(groupLessonDetails.map((l) => l.label))];
-            return { group, busy, hasWindow, lessons, lessonDetails: groupLessonDetails };
+            return { group, busy, hasWindow, windowPairs, lessons, lessonDetails: groupLessonDetails };
           });
           const freeGroups = outOfRange ? [] : groupStatus.filter((g) => !g.busy).map((g) => g.group);
           const busyGroups = outOfRange ? [] : groupStatus.filter((g) => g.busy).map((g) => g.group);
@@ -670,12 +686,13 @@ export function buildWeeks(
             const busy = isBusy(dailyEvents, slot);
             const busySlots = SLOTS.filter((s) => isBusy(dailyEvents, s)).map((s) => s.number);
             const personBusyWithSelected = [...new Set([...busySlots, ...selectedSlotsOnDate.filter((sNum) => !isBusy(dailyEvents, SLOTS[sNum - 1]))])];
-            const hasWindow = hasWindowBefore(personBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+            const hasWindow = hasWindowIfOccupied(personBusyWithSelected.filter((s) => s !== slot.number), slot.number);
+            const windowPairs = countWindowPairsIfOccupied(personBusyWithSelected.filter((s) => s !== slot.number), slot.number);
             const personSlotLessons = slotEvents(dailyEvents, slot);
             const personLessonDetails = personSlotLessons.map(extractLessonDetail);
             const lessons = [...new Set(personLessonDetails.map((l) => l.label))];
             const reason = commissionOptions.failedIds.has(person.id) ? 'load-error' : commissionOptions.mercy && dailyEvents.length === 0 ? 'no-lessons' : busy ? 'busy' : 'free';
-            return { person, busy, hasWindow, noLessons: dailyEvents.length === 0, available: reason === 'free', reason, lessons, lessonDetails: personLessonDetails };
+            return { person, busy, hasWindow, windowPairs, noLessons: dailyEvents.length === 0, available: reason === 'free', reason, lessons, lessonDetails: personLessonDetails };
           }) ?? []);
           const commission: CommissionAvailability[] = teachersDetails.map((t) => ({ person: t.person, available: t.available, reason: t.reason }));
 
@@ -763,7 +780,8 @@ export function buildWeeks(
             }
           }
 
-          return { key: `${date}-${slot.number}`, date, available, teacherBusy, teacherHasWindow, freeGroups, busyGroups, groupsDetails: groupStatus, teachersDetails, freeGroupsWithWindow, lessons, lessonDetails, auditoriumsDetails, freeAuditoriums, busyAuditoriums, auditoriumBusy, outOfRange, commission, windowStatus, unavailableReason, unavailableText };
+          const windowPairs = available ? Math.max(0, teacherHasWindow ? teacherWindowPairs : 0, ...groupStatus.filter((group) => !group.busy && group.hasWindow).map((group) => group.windowPairs), ...teachersDetails.filter((person) => person.available && person.hasWindow).map((person) => person.windowPairs)) : 0;
+          return { key: `${date}-${slot.number}`, date, available, teacherBusy, teacherHasWindow, teacherWindowPairs, windowPairs, freeGroups, busyGroups, groupsDetails: groupStatus, teachersDetails, freeGroupsWithWindow, lessons, lessonDetails, auditoriumsDetails, freeAuditoriums, busyAuditoriums, auditoriumBusy, outOfRange, commission, windowStatus, unavailableReason, unavailableText };
         })
       }))
     });

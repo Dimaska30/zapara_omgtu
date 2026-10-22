@@ -10,6 +10,8 @@
     SLOTS,
     addDays,
     buildViewerWeeks,
+    countWindowPairsIfOccupied,
+    formatPairCount,
     formatDate,
     formatShortName,
     getSchedule,
@@ -24,10 +26,10 @@
 
   const PFI_NAME = 'Прикладная математика и фундаментальная информатика';
   type Status = 'busy' | 'free' | 'window' | 'no-lessons' | 'error';
-  type TeacherSlot = { teacher: SearchItem; status: Status; lessons: ViewerLessonDetail[] };
+  type TeacherSlot = { teacher: SearchItem; status: Status; lessons: ViewerLessonDetail[]; windowPairs: number };
   type BoardRow = { date: string; slot: Slot; teachers: TeacherSlot[] };
   type SelectedLesson = { teacher: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
-  type Candidate = { person: SearchItem; status: Status | 'loading' | 'error' };
+  type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number };
   type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
 
   function mondayOf(date: Date) {
@@ -83,10 +85,6 @@
     return department.trim().toLocaleLowerCase('ru-RU') === 'пмфи' ? PFI_NAME : department.trim();
   }
 
-  function hasWindowAround(busySlots: number[], slotNumber: number): boolean {
-    return busySlots.some((slot) => slot < slotNumber) && busySlots.some((slot) => slot > slotNumber);
-  }
-
   function makeRows(scheduleWeeks: ViewerWeek[], people: SearchItem[], failedIds: Set<string>): BoardRow[] {
     const busyByDay = new Map<string, Set<number>>();
     for (const week of scheduleWeeks) {
@@ -116,14 +114,17 @@
               const lane = cell.lanes.find((item) => item.entity.id === person.id);
               const lessons = lane?.lessons ?? [];
               const dailySlots = [...(busyByDay.get(`${person.id}:${date}`) ?? [])];
+              const windowPairs = !failedIds.has(person.id) && lessons.length === 0 && dailySlots.length
+                ? countWindowPairsIfOccupied(dailySlots, slot.number)
+                : 0;
               const status: Status = failedIds.has(person.id)
                 ? 'error'
                 : lessons.length
                 ? 'busy'
                 : dailySlots.length === 0
                   ? 'no-lessons'
-                  : hasWindowAround(dailySlots, slot.number) ? 'window' : 'free';
-              return { teacher: person, status, lessons };
+                  : windowPairs > 0 ? 'window' : 'free';
+              return { teacher: person, status, lessons, windowPairs };
             })
           });
         }
@@ -237,8 +238,8 @@
     if (lesson) openReplacement(teacher, date, slot, lesson);
   }
 
-  function statusFor(events: Map<string, ApiItem[]>, person: SearchItem, date: string, slotNumber: number): Status {
-    if (!events.has(person.id)) return 'error';
+  function statusFor(events: Map<string, ApiItem[]>, person: SearchItem, date: string, slotNumber: number): { status: Status; windowPairs: number } {
+    if (!events.has(person.id)) return { status: 'error', windowPairs: 0 };
     const personWeeks = buildViewerWeeks(start, finish, [{ id: person.id, label: person.label, type: 'person' }], events);
     const busySlots: number[] = [];
     let busy = false;
@@ -250,9 +251,10 @@
         if (row.slot.number === slotNumber && lane?.lessons.length) busy = true;
       }
     }
-    if (busy) return 'busy';
-    if (!busySlots.length) return 'no-lessons';
-    return hasWindowAround(busySlots, slotNumber) ? 'window' : 'free';
+    if (busy) return { status: 'busy', windowPairs: 0 };
+    if (!busySlots.length) return { status: 'no-lessons', windowPairs: 0 };
+    const windowPairs = countWindowPairsIfOccupied(busySlots, slotNumber);
+    return { status: windowPairs ? 'window' : 'free', windowPairs };
   }
 
   $: selectedTopic = COMMISSION_GROUPS.find((group) => group.id === topicId);
@@ -260,7 +262,7 @@
   function getDepartmentCandidates(selection: SelectedLesson | null): Candidate[] {
     if (!selection) return [];
     const row = rows.find((item) => item.date === selection.date && item.slot.number === selection.slot.number);
-    return sortCandidates(row?.teachers.filter((item) => item.teacher.id !== selection.teacher.id).map((item) => ({ person: item.teacher, status: item.status })) ?? []);
+    return sortCandidates(row?.teachers.filter((item) => item.teacher.id !== selection.teacher.id).map((item) => ({ person: item.teacher, status: item.status, windowPairs: item.windowPairs })) ?? []);
   }
 
   function sortCandidates(items: Candidate[]): Candidate[] {
@@ -268,14 +270,22 @@
     return [...items].sort((a, b) => priority[a.status] - priority[b.status]);
   }
   $: departmentCandidates = getDepartmentCandidates(selectedLesson);
-  $: topicCandidates = selectedLesson ? sortCandidates(topicPeople.map((person) => ({
-    person,
-    status: topicFailedIds.has(person.id) ? 'error' as const : topicSchedules.has(person.id) ? statusFor(topicSchedules, person, selectedLesson!.date, selectedLesson!.slot.number) : topicLoading ? 'loading' as const : 'error' as const
-  }))) : [];
-  $: otherCandidates = selectedLesson ? sortCandidates(selectedOthers.map((person) => ({
-    person,
-    status: otherFailedIds.has(person.id) ? 'error' as const : otherSchedules.has(person.id) ? statusFor(otherSchedules, person, selectedLesson!.date, selectedLesson!.slot.number) : otherLoading ? 'loading' as const : 'error' as const
-  }))) : [];
+  $: topicCandidates = selectedLesson ? sortCandidates(topicPeople.map((person) => {
+    const availability = topicFailedIds.has(person.id)
+      ? { status: 'error' as const, windowPairs: 0 }
+      : topicSchedules.has(person.id)
+        ? statusFor(topicSchedules, person, selectedLesson!.date, selectedLesson!.slot.number)
+        : { status: topicLoading ? 'loading' as const : 'error' as const, windowPairs: 0 };
+    return { person, ...availability };
+  })) : [];
+  $: otherCandidates = selectedLesson ? sortCandidates(selectedOthers.map((person) => {
+    const availability = otherFailedIds.has(person.id)
+      ? { status: 'error' as const, windowPairs: 0 }
+      : otherSchedules.has(person.id)
+        ? statusFor(otherSchedules, person, selectedLesson!.date, selectedLesson!.slot.number)
+        : { status: otherLoading ? 'loading' as const : 'error' as const, windowPairs: 0 };
+    return { person, ...availability };
+  })) : [];
 
   async function chooseTopic(id: string) {
     const requestId = ++topicRequestId;
@@ -334,8 +344,9 @@
     otherFailedIds = new Set(otherFailedIds);
   }
 
-  function candidateStatusText(status: Candidate['status']) {
-    return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? 'свободен · окно' : status === 'no-lessons' ? 'нет пар сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
+  function candidateStatusText(candidate: Candidate) {
+    const { status, windowPairs = 0 } = candidate;
+    return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? `Окно (${formatPairCount(windowPairs)})` : status === 'no-lessons' ? 'нет пар сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
   }
 
   function confirmReplacement(candidate: Candidate) {
@@ -364,7 +375,7 @@
     </div>
     <div slot="options" class="planner-toolbar-options sub-display-options" aria-label="Настройки отображения расписания">
       <div class="sub-status-options" aria-label="Фильтры занятости">
-        <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только пары с занятиями</label>
+        <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только преподаватели с занятиями</label>
         <label class="sub-display-option" class:active={showFreeTeachers}><input type="checkbox" bind:checked={showFreeTeachers} /> Отображать свободных</label>
         <label class="sub-display-option" class:active={showWindowTeachers}><input type="checkbox" bind:checked={showWindowTeachers} /> Отображать свободных с окнами</label>
       </div>
@@ -417,7 +428,7 @@
                                   {#if showAuditoriums}<div class="sub-metadata-line sub-auditoriums">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.auditorium}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={`ауд. ${lesson.auditorium}`}>ауд. {lesson.auditorium}</span>{/if}{/each}</div>{/if}
                                 </div>{/if}
                               {:else}
-                                <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? 'Окно' : state.status === 'error' ? 'Нет данных' : 'Нет пар сегодня'}</span>
+                                <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? `Окно (${formatPairCount(state.windowPairs)})` : state.status === 'error' ? 'Нет данных' : 'Нет пар сегодня'}</span>
                               {/if}
                             </div>
                           {/if}
@@ -452,7 +463,7 @@
         <div class="sub-candidate-list">
           {#each departmentCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status === 'busy' || candidate.status === 'error' || candidate.status === 'loading'} on:click={() => confirmReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate.status)}</b>
+              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}<p class="field-hint">Кроме заменяемого преподавателя на кафедре больше никого нет.</p>{/each}
         </div>
@@ -462,7 +473,7 @@
         <div class="sub-candidate-list">
           {#each topicCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => confirmReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong></span><b>{candidateStatusText(candidate.status)}</b>
+              <span><strong>{candidate.person.label}</strong></span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}{#if topicId && !topicLoading}<p class="field-hint">В этой группе нет других участников.</p>{/if}{/each}
         </div>
@@ -472,7 +483,7 @@
         <div class="sub-candidate-list">
           {#each otherCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => confirmReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate.status)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
+              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
             </button>
           {/each}
         </div>
