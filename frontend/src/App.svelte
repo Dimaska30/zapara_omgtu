@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import CustomSelect from './CustomSelect.svelte';
   import SearchField from './SearchField.svelte';
+  import Substitutions from './Substitutions.svelte';
   import {
     AUDITORIUM_TYPE_CATEGORIES,
     DEFAULT_BUILDINGS,
@@ -59,6 +60,8 @@
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
   let page: Page = 'home';
+  let uiPage: Page = 'home';
+  $: uiPage = page;
   let teacher: SearchItem | null = null;
   let retakeMode: 'first' | 'commission' = 'first';
   let commissionChoice: 'people' | 'group' = 'people';
@@ -873,23 +876,25 @@
           {/each}
         </div>
       </section>
-    {:else if page === 'consultations' || page === 'retakes' || page === 'substitutions' || page === 'meetings'}
+    {:else if page === 'substitutions'}
+      <Substitutions />
+    {:else if page === 'consultations' || page === 'retakes' || page === 'meetings'}
       <div class="workspace">
-        <div class="breadcrumb"><button type="button" on:click={() => go('home')}>Главная</button><span>/</span><span>{page === 'retakes' ? 'Пересдачи' : page === 'substitutions' ? 'Замены' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</span></div>
-        <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / {page === 'retakes' ? '01' : page === 'substitutions' ? '03' : page === 'meetings' ? '04' : '02'}</span><h1>{page === 'retakes' ? 'Время для пересдачи' : page === 'substitutions' ? 'Замены занятий' : page === 'meetings' ? 'Рабочие встречи' : 'Время для консультации'}<span class="heading-period">.</span></h1><p>{page === 'retakes' ? 'Найдём общий свободный слот для преподавателей и учебных групп.' : page === 'substitutions' ? 'Покажем занятия преподавателя и коллег, которые могут его заменить.' : page === 'meetings' ? 'Сопоставим расписания коллег и найдём время, когда свободны все.' : 'Сопоставим расписание преподавателя и групп, чтобы найти удобные окна.'}</p></div><div class="heading-decoration" aria-hidden="true">{page === 'retakes' ? '↗' : page === 'substitutions' ? '⇄' : page === 'meetings' ? '✧' : '◷'}</div></section>
+        <div class="breadcrumb"><button type="button" on:click={() => go('home')}>Главная</button><span>/</span><span>{page === 'retakes' ? 'Пересдачи' : uiPage === 'substitutions' ? 'Замены' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</span></div>
+        <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / {page === 'retakes' ? '01' : uiPage === 'substitutions' ? '03' : page === 'meetings' ? '04' : '02'}</span><h1>{page === 'retakes' ? 'Время для пересдачи' : uiPage === 'substitutions' ? 'Замены занятий' : page === 'meetings' ? 'Рабочие встречи' : 'Время для консультации'}<span class="heading-period">.</span></h1><p>{page === 'retakes' ? 'Найдём общий свободный слот для преподавателей и учебных групп.' : uiPage === 'substitutions' ? 'Покажем занятия преподавателя и коллег, которые могут его заменить.' : page === 'meetings' ? 'Сопоставим расписания коллег и найдём время, когда свободны все.' : 'Сопоставим расписание преподавателя и групп, чтобы найти удобные окна.'}</p></div><div class="heading-decoration" aria-hidden="true">{page === 'retakes' ? '↗' : uiPage === 'substitutions' ? '⇄' : page === 'meetings' ? '✧' : '◷'}</div></section>
 
         {#if page === 'retakes'}<div class="retake-mode"><div><span class="section-kicker">ФОРМАТ</span><strong>Тип пересдачи</strong></div><div class="retake-toggle" role="group" aria-label="Тип пересдачи"><button type="button" class:active={retakeMode === 'first'} aria-pressed={retakeMode === 'first'} on:click={() => changeRetakeMode('first')}>1 пересдача</button><button type="button" class:active={retakeMode === 'commission'} aria-pressed={retakeMode === 'commission'} on:click={() => changeRetakeMode('commission')}>Комиссионная пересдача</button></div></div>{/if}
 
         <div class="workspace-layout">
           <aside class="controls-panel">
-            <div class="panel-top"><span class="panel-number">01 — НАСТРОЙКА</span><h2>{page === 'substitutions' ? 'Кого и когда заменить?' : 'Кого и когда собрать?'}</h2></div>
+            <div class="panel-top"><span class="panel-number">01 — НАСТРОЙКА</span><h2>{uiPage === 'substitutions' ? 'Кого и когда заменить?' : 'Кого и когда собрать?'}</h2></div>
             {#if page === 'meetings'}
               <div class="field-block"><div class="field-head"><label>Преподаватели</label><span>01</span></div>
                 <SearchField type="person" placeholder="Добавить преподавателя" onPick={addMeetingTeacher} />
                 {#if meetingTeachers.length}<div class="group-chips">{#each meetingTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeMeetingTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}>×</button></span>{/each}</div>{/if}
                 {#if meetingError}<p class="form-error">{meetingError}</p>{:else}<p class="field-hint">Можно добавить любое количество преподавателей.</p>{/if}
               </div>
-            {:else}<div class="field-block"><div class="field-head"><label>{page === 'substitutions' ? 'Кого нужно заменить' : 'Преподаватель'}</label><span>01</span></div>
+            {:else}<div class="field-block"><div class="field-head"><label>{uiPage === 'substitutions' ? 'Кого нужно заменить' : 'Преподаватель'}</label><span>01</span></div>
               {#if teacher}
                 <div class="chosen-person"><span class="avatar">{teacher.label.slice(0, 1)}</span><span><strong>{teacher.label}</strong><small>Преподаватель выбран</small></span><button type="button" on:click={removeTeacher} aria-label="Удалить преподавателя">×</button></div>
               {:else}
@@ -898,13 +903,13 @@
               {/if}
             </div>{/if}
 
-            {#if page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')}
-              <div class="field-block"><div class="field-head"><label>{page === 'substitutions' ? 'Кто может заменить' : 'Состав комиссии'}</label><span>02</span></div>
-                <div class="commission-choice" role="group" aria-label={page === 'substitutions' ? 'Способ выбора замещающих преподавателей' : 'Способ выбора комиссии'}><button type="button" class:active={commissionChoice === 'people'} aria-pressed={commissionChoice === 'people'} on:click={() => changeCommissionChoice('people')}>Конкретные люди</button><button type="button" class:active={commissionChoice === 'group'} aria-pressed={commissionChoice === 'group'} on:click={() => changeCommissionChoice('group')}>Тематическая группа</button></div>
+            {#if uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')}
+              <div class="field-block"><div class="field-head"><label>{uiPage === 'substitutions' ? 'Кто может заменить' : 'Состав комиссии'}</label><span>02</span></div>
+                <div class="commission-choice" role="group" aria-label={uiPage === 'substitutions' ? 'Способ выбора замещающих преподавателей' : 'Способ выбора комиссии'}><button type="button" class:active={commissionChoice === 'people'} aria-pressed={commissionChoice === 'people'} on:click={() => changeCommissionChoice('people')}>Конкретные люди</button><button type="button" class:active={commissionChoice === 'group'} aria-pressed={commissionChoice === 'group'} on:click={() => changeCommissionChoice('group')}>Тематическая группа</button></div>
                 {#if commissionChoice === 'people'}
-                  {#if page === 'substitutions' || commissionTeachers.length < 2}<SearchField type="person" placeholder="Добавить преподавателя" onPick={addCommissionTeacher} />{/if}
+                  {#if uiPage === 'substitutions' || commissionTeachers.length < 2}<SearchField type="person" placeholder="Добавить преподавателя" onPick={addCommissionTeacher} />{/if}
                   {#if commissionTeachers.length}<div class="group-chips">{#each commissionTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeCommissionTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}>×</button></span>{/each}</div>{/if}
-                  {#if committeeError}<p class="form-error">{committeeError}</p>{:else}<p class="field-hint">{page === 'substitutions' ? 'Можно добавить любое количество преподавателей.' : 'Добавьте одного или двух преподавателей.'}</p>{/if}
+                  {#if committeeError}<p class="form-error">{committeeError}</p>{:else}<p class="field-hint">{uiPage === 'substitutions' ? 'Можно добавить любое количество преподавателей.' : 'Добавьте одного или двух преподавателей.'}</p>{/if}
                 {:else}
                   <CustomSelect
                     ariaLabel="Тематическая группа преподавателей"
@@ -916,18 +921,18 @@
                     ]}
                     on:change={(event) => changeCommissionGroup(event.detail)}
                   />
-                  {#if selectedCommissionGroup}<p class="field-hint">Кандидатов: {selectedCommissionGroup.people.filter((person) => person.id !== teacher?.id).length}. {page === 'substitutions' ? 'Заменяемый преподаватель' : 'Основной преподаватель'} в число кандидатов не входит.</p>{/if}
+                  {#if selectedCommissionGroup}<p class="field-hint">Кандидатов: {selectedCommissionGroup.people.filter((person) => person.id !== teacher?.id).length}. {uiPage === 'substitutions' ? 'Заменяемый преподаватель' : 'Основной преподаватель'} в число кандидатов не входит.</p>{/if}
                 {/if}
               </div>
               <div class="mercy-field"><label class="mercy-switch"><input type="checkbox" checked={mercy} on:change={(event) => changeMercy((event.currentTarget as HTMLInputElement).checked)} /><span class="mercy-track"></span><strong>Милосердие</strong></label><p>Не считать доступными преподавателей, у которых в этот день совсем нет пар.</p></div>
             {/if}
 
-            {#if page !== 'substitutions' && page !== 'meetings'}<div class="field-block"><div class="field-head"><label>Учебные группы</label><span>{groupsStepNumber}</span></div>
+            {#if uiPage !== 'substitutions' && page !== 'meetings'}<div class="field-block"><div class="field-head"><label>Учебные группы</label><span>{groupsStepNumber}</span></div>
               <SearchField type="group" placeholder="Например, М-251" onPick={addGroup} />
               {#if groups.length}<div class="group-chips">{#each groups as group (group.id)}<span class="group-chip">{group.label}<button type="button" on:click={() => removeGroup(group.id)} aria-label={`Удалить группу ${group.label}`}>×</button></span>{/each}</div>{:else}<p class="field-hint">Можно добавить любое количество групп</p>{/if}
             </div>{/if}
 
-            {#if page !== 'substitutions' && page !== 'meetings'}
+            {#if uiPage !== 'substitutions' && page !== 'meetings'}
             <div class="field-block auditorium-field-block">
               <div class="field-head">
                 <label>Аудитории <small class="field-optional">(опционально)</small></label>
@@ -1065,15 +1070,15 @@
 
             <div class="field-block date-block"><div class="field-head"><label>Период</label><span>{periodStepNumber}</span></div><div class="date-fields"><div><label for="start-date">С</label><input id="start-date" type="date" value={start} on:change={(event) => changeStart((event.currentTarget as HTMLInputElement).value)} /></div><div><label for="end-date">ПО</label><input id="end-date" type="date" min={start} value={finish} on:change={(event) => changeFinish((event.currentTarget as HTMLInputElement).value)} /></div></div></div>
             {#if start && finish && start > finish}<p class="form-error">Дата окончания раньше даты начала.</p>{/if}
-            <button class="primary-button generate-button" type="button" disabled={(page === 'meetings' ? !meetingTeachers.length : !teacher) || (page !== 'meetings' && page !== 'substitutions' && !groups.length) || !start || !finish || start > finish || loading || ((page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && (commissionChoice === 'people' ? !commissionTeachers.length : !commissionGroupId))} on:click={generate}>{loading ? 'Загружаем расписание…' : page === 'substitutions' ? 'Показать замены' : 'Показать свободное время'}<span aria-hidden="true">↗</span></button>
-            <div class="panel-note"><span>ⓘ</span><p>{page === 'substitutions' ? 'Выбирайте занятия заменяемого преподавателя. Доступность коллег показана под каждой парой и не ограничивает выбор.' : page === 'meetings' ? 'Зелёные слоты свободны у всех выбранных преподавателей.' : 'Расписание загружается с сайта ОмГТУ. В таблице можно выбрать подходящие пары.'}</p></div>
+            <button class="primary-button generate-button" type="button" disabled={(page === 'meetings' ? !meetingTeachers.length : !teacher) || (page !== 'meetings' && uiPage !== 'substitutions' && !groups.length) || !start || !finish || start > finish || loading || ((uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && (commissionChoice === 'people' ? !commissionTeachers.length : !commissionGroupId))} on:click={generate}>{loading ? 'Загружаем расписание…' : uiPage === 'substitutions' ? 'Показать замены' : 'Показать свободное время'}<span aria-hidden="true">↗</span></button>
+            <div class="panel-note"><span>ⓘ</span><p>{uiPage === 'substitutions' ? 'Выбирайте занятия заменяемого преподавателя. Доступность коллег показана под каждой парой и не ограничивает выбор.' : page === 'meetings' ? 'Зелёные слоты свободны у всех выбранных преподавателей.' : 'Расписание загружается с сайта ОмГТУ. В таблице можно выбрать подходящие пары.'}</p></div>
           </aside>
 
           <section class="results-panel" aria-live="polite">
             <div class="results-header">
               <div>
                 <span class="panel-number">02 — РЕЗУЛЬТАТ</span>
-                <h2>{page === 'substitutions' ? 'Занятия и доступные замены' : 'Общие свободные окна'}</h2>
+                <h2>{uiPage === 'substitutions' ? 'Занятия и доступные замены' : 'Общие свободные окна'}</h2>
               </div>
               <div class="results-header-actions">
                 <div class="display-mode-toggle" role="group" aria-label="Режим отображения расписания">
@@ -1102,11 +1107,11 @@
               </div>
             </div>
             {#if error}<div class="state-card error-card"><span class="state-icon">!</span><h3>Не удалось получить расписание</h3><p>{error}</p><button type="button" on:click={generate}>Повторить запрос ↗</button></div>
-            {:else if loading}<div class="state-card"><span class="state-icon loading-icon">◷</span><h3>Сопоставляем расписания</h3><p>{page === 'substitutions' ? 'Загружаем занятия и расписания возможных замещающих преподавателей.' : page === 'meetings' ? 'Загружаем расписания выбранных преподавателей.' : 'Загружаем основного преподавателя, группы и выбранный состав комиссии.'}</p></div>
-            {:else if !hasGenerated}<div class="state-card empty-card"><div class="empty-illustration"><span>01</span><span>02</span><span>03</span><span>04</span></div><h3>{page === 'substitutions' ? 'Здесь появятся занятия' : 'Здесь появятся свободные окна'}</h3><p>{page === 'substitutions' ? 'Выберите преподавателя, которого нужно заменить, укажите возможных заменяющих и период. Мы покажем его занятия и доступность коллег.' : page === 'meetings' ? 'Добавьте преподавателей и укажите даты. Мы покажем пары, свободные у всех выбранных.' : `Выберите преподавателя, добавьте группы и укажите даты.${page === 'retakes' && retakeMode === 'commission' ? ' Для комиссии укажите людей или тематическую группу.' : ''} Мы покажем общие свободные пары по неделям.`}</p></div>
+            {:else if loading}<div class="state-card"><span class="state-icon loading-icon">◷</span><h3>Сопоставляем расписания</h3><p>{uiPage === 'substitutions' ? 'Загружаем занятия и расписания возможных замещающих преподавателей.' : page === 'meetings' ? 'Загружаем расписания выбранных преподавателей.' : 'Загружаем основного преподавателя, группы и выбранный состав комиссии.'}</p></div>
+            {:else if !hasGenerated}<div class="state-card empty-card"><div class="empty-illustration"><span>01</span><span>02</span><span>03</span><span>04</span></div><h3>{uiPage === 'substitutions' ? 'Здесь появятся занятия' : 'Здесь появятся свободные окна'}</h3><p>{uiPage === 'substitutions' ? 'Выберите преподавателя, которого нужно заменить, укажите возможных заменяющих и период. Мы покажем его занятия и доступность коллег.' : page === 'meetings' ? 'Добавьте преподавателей и укажите даты. Мы покажем пары, свободные у всех выбранных.' : `Выберите преподавателя, добавьте группы и укажите даты.${page === 'retakes' && retakeMode === 'commission' ? ' Для комиссии укажите людей или тематическую группу.' : ''} Мы покажем общие свободные пары по неделям.`}</p></div>
             {:else}
               <div class="legend">
-                {#if page === 'substitutions'}
+                {#if uiPage === 'substitutions'}
                   <span><i class="legend-dot free"></i>Занятие для замены</span>
                   <span><i class="legend-dot selected"></i>Выбрано</span>
                   <span><i class="legend-dot unavailable"></i>Нет занятия</span>
@@ -1137,22 +1142,22 @@
                 {/if}
               </div>
               {#if unknownDates > 0}<p class="warning-note">У {unknownDates} занятий не удалось определить дату. Проверьте итог по исходному расписанию.</p>{/if}
-              {#if failedCommissionCount > 0}<p class="warning-note">Не удалось загрузить расписание {failedCommissionCount} {failedCommissionCount === 1 ? 'преподавателя' : 'преподавателей'} {page === 'substitutions' ? 'для замены' : page === 'meetings' ? 'для встречи' : 'комиссии'}. {page === 'meetings' ? 'Общие свободные слоты нельзя определить, пока не загрузятся все расписания.' : 'Они не отмечены как доступные.'}</p>{/if}
+              {#if failedCommissionCount > 0}<p class="warning-note">Не удалось загрузить расписание {failedCommissionCount} {failedCommissionCount === 1 ? 'преподавателя' : 'преподавателей'} {uiPage === 'substitutions' ? 'для замены' : page === 'meetings' ? 'для встречи' : 'комиссии'}. {page === 'meetings' ? 'Общие свободные слоты нельзя определить, пока не загрузятся все расписания.' : 'Они не отмечены как доступные.'}</p>{/if}
               {#each weeks as week, index}
                 <div class="week-block"><div class="week-title"><div><span>НЕДЕЛЯ {String(index + 1).padStart(2, '0')}</span><h3>{dateShort(week.monday)} — {dateShort(week.saturday)}</h3></div><span>ПН — СБ</span></div>
                   <div class="table-scroll"><div class="schedule-table" role="table" aria-label={`Неделя ${dateShort(week.monday)} — ${dateShort(week.saturday)}`}>
                     <div class="table-row table-head" role="row"><div role="columnheader" class="time-heading">ПАРА / ВРЕМЯ</div>{#each week.dates as date, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="columnheader" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} title={displayMode === 'windows' ? (dStatus?.tooltipText || '') : ''}>{#if displayMode === 'windows'}<div class="head-day-info"><strong>{dayNames[day]}</strong><span>{dateShort(date)}</span></div>{#if dStatus && dStatus.bothFreeDay}<span class="day-col-badge" class:badge-no-lessons={page === 'meetings'} class:badge-both={page !== 'meetings'}>{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у всех' : 'Без пар у обоих')}</span>{:else if dStatus && dStatus.teacherFreeDay}<span class="day-col-badge badge-teacher">{dStatus.badgeLabel || 'Без пар у преп.'}</span>{:else if dStatus && dStatus.groupFreeDay}<span class="day-col-badge badge-group">{dStatus.badgeLabel || (groups.length > 1 ? 'Без пар у групп' : 'Без пар у группы')}</span>{/if}{:else}<strong>{dayNames[day]}</strong><span>{dateShort(date)}</span>{/if}</div>{/each}</div>
                     {#each week.rows as row, rowIndex}<div class="table-row" role="row"><div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
-                      {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
+                      {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
                         {#if selected.has(cell.key) && slotAssignedAuditoriums.has(cell.key)}<span class="cell-assigned-aud-chip">Ауд. {slotAssignedAuditoriums.get(cell.key)?.name}</span>{/if}
-                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if page === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={t.person.label}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if page === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={detail.group.label}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
-                        {#if (page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{page === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
+                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={t.person.label}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={detail.group.label}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
+                        {#if (uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{uiPage === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
                       </button>
-                      {#if (page === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
+                      {#if (uiPage === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
                         {#if commissionChoice === 'people'}
                           {#each cell.commission as entry, number}<span class="commission-person-indicator" class:can-attend={entry.available} class:no-lessons={entry.reason === 'no-lessons'} class:load-error={entry.reason === 'load-error'} title={`${entry.person.label}: ${commissionReason(entry.reason)}`} aria-label={`Преподаватель ${number + 1}, ${entry.person.label}: ${commissionReason(entry.reason)}`}>{number + 1} {entry.available ? '✓' : '×'}</span>{/each}
                         {:else}
-                          <span class="commission-count" title={freeCommission(cell).length ? freeCommission(cell).join('\n') : 'Нет доступных преподавателей'} aria-label={`${freeCommission(cell).length} из ${cell.commission.length} преподавателей ${page === 'substitutions' ? 'могут заменить' : 'комиссии могут присутствовать'}`}>{freeCommission(cell).length} из {cell.commission.length} могут</span>
+                          <span class="commission-count" title={freeCommission(cell).length ? freeCommission(cell).join('\n') : 'Нет доступных преподавателей'} aria-label={`${freeCommission(cell).length} из ${cell.commission.length} преподавателей ${uiPage === 'substitutions' ? 'могут заменить' : 'комиссии могут присутствовать'}`}>{freeCommission(cell).length} из {cell.commission.length} могут</span>
                         {/if}
                       </div>{/if}
                       </div>{/each}
@@ -1160,7 +1165,7 @@
                   </div></div>
                 </div>
               {/each}
-              {#if !weeks.some((week) => week.rows.some((row) => row.cells.some((cell) => cell.available)))}<p class="no-free">{page === 'substitutions' ? 'В этом периоде занятий для замены не найдено. Попробуйте изменить даты.' : page === 'meetings' ? 'В этом периоде общих свободных пар не найдено. Попробуйте изменить даты или состав участников.' : 'В этом периоде общих свободных пар не найдено. Попробуйте изменить даты или состав групп.'}</p>{/if}
+              {#if !weeks.some((week) => week.rows.some((row) => row.cells.some((cell) => cell.available)))}<p class="no-free">{uiPage === 'substitutions' ? 'В этом периоде занятий для замены не найдено. Попробуйте изменить даты.' : page === 'meetings' ? 'В этом периоде общих свободных пар не найдено. Попробуйте изменить даты или состав участников.' : 'В этом периоде общих свободных пар не найдено. Попробуйте изменить даты или состав групп.'}</p>{/if}
             {/if}
           </section>
         </div>
@@ -1175,8 +1180,8 @@
           >
             <span class="selection-count">{selectedCount}</span>
             <span class="selection-text">
-              <strong>Выбрано {page === 'substitutions' ? 'занятий' : 'слотов'}</strong>
-              <small>{selectedCount ? `В ${new Set(selectedDetails.map((item) => item.cell.date)).size} дн. · Посмотреть` : page === 'substitutions' ? 'Нажмите на занятие' : 'Нажмите на свободную пару'}</small>
+              <strong>Выбрано {uiPage === 'substitutions' ? 'занятий' : 'слотов'}</strong>
+              <small>{selectedCount ? `В ${new Set(selectedDetails.map((item) => item.cell.date)).size} дн. · Посмотреть` : uiPage === 'substitutions' ? 'Нажмите на занятие' : 'Нажмите на свободную пару'}</small>
             </span>
             {#if selectedCount}
               <span class="selection-arrow-icon">↗</span>
@@ -1574,7 +1579,7 @@
               </div>
             </div>
           {/if}
-        {:else if page === 'substitutions'}
+        {:else if uiPage === 'substitutions'}
           {#if cell.teacherBusy}
             <div class="tooltip-section">
               <span class="party-label">Занятие преподавателя:</span>
