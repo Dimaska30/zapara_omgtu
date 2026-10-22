@@ -13,7 +13,6 @@
     formatDate,
     formatShortName,
     getSchedule,
-    hasWindowBefore,
     search,
     toIso,
     type ApiItem,
@@ -42,6 +41,8 @@
   let finish = toIso(addDays(firstMonday, 12));
   let department = 'ПМФИ';
   let activeOnly = true;
+  let showFreeTeachers = false;
+  let showWindowTeachers = false;
   let showSubjects = false;
   let showGroups = false;
   let showAuditoriums = false;
@@ -82,6 +83,10 @@
     return department.trim().toLocaleLowerCase('ru-RU') === 'пмфи' ? PFI_NAME : department.trim();
   }
 
+  function hasWindowAround(busySlots: number[], slotNumber: number): boolean {
+    return busySlots.some((slot) => slot < slotNumber) && busySlots.some((slot) => slot > slotNumber);
+  }
+
   function makeRows(scheduleWeeks: ViewerWeek[], people: SearchItem[], failedIds: Set<string>): BoardRow[] {
     const busyByDay = new Map<string, Set<number>>();
     for (const week of scheduleWeeks) {
@@ -117,7 +122,7 @@
                 ? 'busy'
                 : dailySlots.length === 0
                   ? 'no-lessons'
-                  : hasWindowBefore(dailySlots, slot.number) ? 'window' : 'free';
+                  : hasWindowAround(dailySlots, slot.number) ? 'window' : 'free';
               return { teacher: person, status, lessons };
             })
           });
@@ -247,7 +252,7 @@
     }
     if (busy) return 'busy';
     if (!busySlots.length) return 'no-lessons';
-    return hasWindowBefore(busySlots, slotNumber) ? 'window' : 'free';
+    return hasWindowAround(busySlots, slotNumber) ? 'window' : 'free';
   }
 
   $: selectedTopic = COMMISSION_GROUPS.find((group) => group.id === topicId);
@@ -358,10 +363,16 @@
       <span><i class="sub-legend-dot busy"></i>Занятие · нажмите для замены</span>
     </div>
     <div slot="options" class="planner-toolbar-options sub-display-options" aria-label="Настройки отображения расписания">
-      <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только пары с занятиями</label>
-      <label class="sub-display-option" class:active={showSubjects}><input type="checkbox" bind:checked={showSubjects} /> Отображать предметы</label>
-      <label class="sub-display-option" class:active={showGroups}><input type="checkbox" bind:checked={showGroups} /> Отображать группы</label>
-      <label class="sub-display-option" class:active={showAuditoriums}><input type="checkbox" bind:checked={showAuditoriums} /> Отображать аудитории</label>
+      <div class="sub-status-options" aria-label="Фильтры занятости">
+        <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только пары с занятиями</label>
+        <label class="sub-display-option" class:active={showFreeTeachers}><input type="checkbox" bind:checked={showFreeTeachers} /> Отображать свободных</label>
+        <label class="sub-display-option" class:active={showWindowTeachers}><input type="checkbox" bind:checked={showWindowTeachers} /> Отображать свободных с окнами</label>
+      </div>
+      <div class="sub-detail-options" aria-label="Отображаемые сведения">
+        <label class="sub-display-option" class:active={showSubjects}><input type="checkbox" bind:checked={showSubjects} /> Отображать предметы</label>
+        <label class="sub-display-option" class:active={showGroups}><input type="checkbox" bind:checked={showGroups} /> Отображать группы</label>
+        <label class="sub-display-option" class:active={showAuditoriums}><input type="checkbox" bind:checked={showAuditoriums} /> Отображать аудитории</label>
+      </div>
     </div>
   </PlannerToolbar>
   {#if failedTeacherIds.size}
@@ -385,7 +396,10 @@
               <div class="table-row" role="row">
                 <div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                 {#each row.cells as cell (cell.key)}
-                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => ['busy', 'error'].includes(teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status ?? '')) : cell.lanes}
+                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => {
+                    const status = teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status;
+                    return status === 'busy' || status === 'error' || (showFreeTeachers && status === 'free') || (showWindowTeachers && status === 'window');
+                  }) : cell.lanes}
                   <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:out-of-range={cell.outOfRange}>
                     {#if cell.outOfRange}
                       <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
@@ -490,9 +504,10 @@
 
 <style>
   .substitution-workspace{max-width:1600px}
-  .substitution-legend{gap:9px 20px;padding:0 2px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
+  .substitution-legend{gap:9px 20px;padding:0 2px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;flex:1 1 100%;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-left:0}.sub-status-options{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:7px}.sub-detail-options{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
   .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
+  @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column}.sub-detail-options{margin-left:0;justify-content:flex-start}}
   @media(max-width:560px){.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
 </style>
