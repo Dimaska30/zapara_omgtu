@@ -30,7 +30,7 @@
 .cell-status-tag{font-size:8px;font-weight:700;line-height:1.2;opacity:0.9}
 .tag-none{color:#235c3b}
 .tag-group-window{color:#7a541c}
-.tag-teacher-window{color:#873639}
+.tag-teacher-window{color:#7a541c}
 .tag-both-window{color:#7d3346}
 .is-selected .cell-status-tag{color:#dcfce7 !important;opacity:0.95}
 .cell-unavailable-reason{font-size:9px;font-weight:700;line-height:1.25;color:#6b7c72;text-align:center;padding:2px}.cell-muted{font-size:9px;font-weight:600}.cell-group-list{font-size:9px;line-height:1.45;font-weight:800;overflow-wrap:anywhere;word-break:break-word;min-width:0;max-width:100%}.cell-check{font-size:13px;flex:0 0 17px;width:17px;height:17px;display:grid;place-items:center;border-radius:4px;background:#d3ead5;color:#39875a;flex-shrink:0;margin-left:3px;margin-top:1px}.is-selected .cell-check{background:#ffffff30;color:#fff}.no-free{background:#f5f8f2;color:#778a79;padding:13px;font-size:11px;border-radius:6px}.selection-bar{position:fixed;right:30px;bottom:24px;background:#193c31;color:#fff;display:flex;align-items:center;gap:13px;padding:11px 14px;border-radius:12px;box-shadow:0 14px 35px rgba(18,58,40,.28);z-index:20}.selection-count{background:#5faf7d;width:38px;height:38px;display:grid;place-items:center;border-radius:8px;font-size:20px;font-weight:800}.selection-bar>span:nth-child(2){display:flex;flex-direction:column;gap:2px;min-width:126px}.selection-bar strong{font-size:11px}.selection-bar small{font-size:9px;color:#b4d5bd}.selection-bar button{border:0;background:#335a49;color:#d8efdc;padding:8px 10px;border-radius:6px;font-size:10px;font-weight:800}.placeholder-page{min-height:calc(100vh - 150px)}.placeholder-content{max-width:650px;margin:90px auto;text-align:center}.placeholder-mark{display:grid;place-items:center;background:#e4f0e5;color:#488b67;width:102px;height:102px;border-radius:26px;margin:0 auto 30px;font-size:47px}.placeholder-content p{max-width:480px;margin:0 auto 28px;color:#85968a;font-size:13px;line-height:1.8}
@@ -153,9 +153,9 @@ select:focus,
   border: 1px solid #ebd9a8;
 }
 .mini-chip.chip-teacher-window{
-  background: #faeaea;
-  color: #873639;
-  border: 1px solid #edd0d0;
+  background: #faeec7;
+  color: #7a541c;
+  border: 1px solid #f2e2b6;
 }
 .mini-chip.chip-busy{
   background: #edf1ee;
@@ -246,9 +246,9 @@ select:focus,
   border: 1px solid #f2e2b6;
 }
 .tooltip-badge.status-teacher-window{
-  background: #fcf2f2;
-  color: #873639;
-  border: 1px solid #f2cfcf;
+  background: #fdfaf0;
+  color: #7a541c;
+  border: 1px solid #f2e2b6;
 }
 .tooltip-badge.status-both-window{
   background: #faf1f4;
@@ -342,8 +342,8 @@ select:focus,
   color: #7a541c;
 }
 .card-teacher-window .entity-badge{
-  background: #faeaea;
-  color: #873639;
+  background: #faeec7;
+  color: #7a541c;
 }
 .card-busy .entity-badge{
   background: #ebf0ed;
@@ -1246,9 +1246,9 @@ select:focus,
   border: 1px solid #f0deaa;
 }
 .slot-badge.tag-teacher-window {
-  background: #fcf2f2;
-  color: #873639;
-  border: 1px solid #f0c9c9;
+  background: #fdfaf0;
+  color: #7a541c;
+  border: 1px solid #f2e2b6;
 }
 .slot-badge.tag-both-window {
   background: #faf1f4;
