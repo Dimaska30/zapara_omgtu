@@ -1044,7 +1044,7 @@
         </div>
       {/if}
     {:else if page === 'schedule'}
-      <div class="workspace">
+      <div class="workspace workspace-fluid">
         <div class="breadcrumb">
           <button type="button" on:click={() => go('home')}>Главная</button>
           <span>/</span>
@@ -1059,7 +1059,7 @@
           <div class="heading-decoration" aria-hidden="true">▦</div>
         </section>
 
-        <div class="workspace-layout">
+        <div class="workspace-layout viewer-layout">
           <aside class="controls-panel">
             <div class="panel-top">
               <span class="panel-number">01 — ВЫБОР ОБЪЕКТОВ</span>
@@ -1184,7 +1184,7 @@
             </div>
           </aside>
 
-          <section class="results-panel" aria-live="polite">
+          <section class="results-panel viewer-results" aria-live="polite">
             <div class="results-header">
               <div>
                 <span class="panel-number">02 — РЕЗУЛЬТАТ</span>
