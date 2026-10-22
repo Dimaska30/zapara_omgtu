@@ -98,6 +98,7 @@ export type DayColumnStatus = {
   groupFreeDay: boolean;
   bothFreeDay: boolean;
   freeDayStatus: 'none' | 'teacher' | 'group' | 'both';
+  badgeLabel?: string;
   tooltipText: string;
 };
 
@@ -532,6 +533,29 @@ export function buildWeeks(
         };
       }
 
+      if (mode === 'meeting' && commissionOptions?.people && commissionOptions.people.length > 0) {
+        const freeMeetingTeachers = commissionOptions.people.filter((p) => {
+          const dailyEvents = indexedCommission.get(p.id)?.byDate.get(date) ?? [];
+          return dailyEvents.length === 0;
+        });
+        const allMeetingFree = freeMeetingTeachers.length === commissionOptions.people.length;
+        if (allMeetingFree) {
+          const badgeLabel = commissionOptions.people.length === 2 ? 'Без пар у обоих' : 'Без пар у всех';
+          const tooltipText = `У всех преподавателей (${commissionOptions.people.map((p) => p.label).join(', ')}) в этот день нет пар`;
+          return {
+            date,
+            dayIndex,
+            outOfRange: false,
+            teacherFreeDay: false,
+            groupFreeDay: false,
+            bothFreeDay: true,
+            freeDayStatus: 'both',
+            badgeLabel,
+            tooltipText
+          };
+        }
+      }
+
       const teacherDailyEvents = teacher.byDate.get(date) ?? [];
       const teacherFreeDay = teacherEvents.length > 0 && teacherDailyEvents.length === 0;
 
@@ -539,7 +563,8 @@ export function buildWeeks(
         const dailyEvents = indexedGroups.get(group.id)?.byDate.get(date) ?? [];
         return dailyEvents.length === 0;
       });
-      const groupFreeDay = groups.length > 0 && freeGroupObjects.length > 0;
+      const allGroupsFree = groups.length > 0 && freeGroupObjects.length === groups.length;
+      const groupFreeDay = allGroupsFree;
       const bothFreeDay = teacherFreeDay && groupFreeDay;
 
       const freeDayStatus: 'none' | 'teacher' | 'group' | 'both' = bothFreeDay
@@ -550,12 +575,26 @@ export function buildWeeks(
         ? 'group'
         : 'none';
 
+      let badgeLabel = '';
       let tooltipText = '';
       if (bothFreeDay) {
-        tooltipText = `У преподавателя и ${freeGroupObjects.length > 1 ? 'групп' : 'группы'} (${freeGroupObjects.map((g) => g.label).join(', ')}) в этот день нет пар`;
+        badgeLabel = groups.length > 1 ? 'Без пар у всех' : 'Без пар у обоих';
+        if (groups.length > 1) {
+          tooltipText = `У преподавателя и всех групп (${freeGroupObjects.map((g) => g.label).join(', ')}) в этот день нет пар`;
+        } else {
+          tooltipText = `У преподавателя и группы (${freeGroupObjects.map((g) => g.label).join(', ')}) в этот день нет пар`;
+        }
       } else if (teacherFreeDay) {
-        tooltipText = 'У преподавателя в этот день нет пар';
+        badgeLabel = 'Без пар у преп.';
+        if (freeGroupObjects.length > 0) {
+          tooltipText = `У преподавателя в этот день нет пар (у ${freeGroupObjects.length > 1 ? 'групп' : 'группы'} ${freeGroupObjects.map((g) => g.label).join(', ')} также нет пар)`;
+        } else {
+          tooltipText = 'У преподавателя в этот день нет пар';
+        }
       } else if (groupFreeDay) {
+        badgeLabel = groups.length > 1 ? 'Без пар у групп' : 'Без пар у группы';
+        tooltipText = `У ${groups.length > 1 ? 'всех групп' : 'группы'} (${freeGroupObjects.map((g) => g.label).join(', ')}) в этот день нет пар`;
+      } else if (freeGroupObjects.length > 0) {
         tooltipText = `У ${freeGroupObjects.length > 1 ? 'групп' : 'группы'} (${freeGroupObjects.map((g) => g.label).join(', ')}) в этот день нет пар`;
       }
 
@@ -567,6 +606,7 @@ export function buildWeeks(
         groupFreeDay,
         bothFreeDay,
         freeDayStatus,
+        badgeLabel,
         tooltipText
       };
     });
