@@ -3,6 +3,9 @@
   import CustomSelect from './CustomSelect.svelte';
   import SearchField from './SearchField.svelte';
   import Substitutions from './Substitutions.svelte';
+  import PlannerPageFrame from './PlannerPageFrame.svelte';
+  import PlannerFilterBar from './PlannerFilterBar.svelte';
+  import PlannerToolbar from './PlannerToolbar.svelte';
   import {
     AUDITORIUM_TYPE_CATEGORIES,
     DEFAULT_BUILDINGS,
@@ -19,6 +22,7 @@
     getBuildingSchedule,
     getSchedule,
     matchesAuditoriumType,
+    search,
     toIso,
     type ApiItem,
     type AuditoriumAvailabilityInfo,
@@ -55,7 +59,7 @@
     { page: 'consultations', number: '02', name: 'Консультации', description: 'Найдите общие свободные окна', icon: '◷', active: true },
     { page: 'substitutions', number: '03', name: 'Замены', description: 'Найдите коллег для замены занятий', icon: '⇄', active: true },
     { page: 'meetings', number: '04', name: 'Рабочие встречи', description: 'Найдите общее время для коллег', icon: '✧', active: true },
-    { page: 'schedule', number: '05', name: 'Расписание', description: 'Сравнение расписания групп, преподавателей и аудиторий', icon: '▦', active: true }
+    { page: 'schedule', number: '05', name: 'Расписание', description: 'Сравнение расписаний групп МО и ФИТ', icon: '▦', active: true }
   ];
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
@@ -126,14 +130,104 @@
   }
 
   // Schedule viewer state
-  let viewerEntities: ScheduleViewerEntity[] = [];
-  let viewerActiveType: 'group' | 'person' | 'auditorium' = 'group';
-  let viewerStart: string = toIso(new Date());
-  let viewerFinish: string = toIso(addDays(new Date(), 21));
+  function viewerWeekStart(date: Date) {
+    return addDays(date, -((date.getDay() + 6) % 7));
+  }
+
+  const viewerDefaultStart = toIso(viewerWeekStart(new Date()));
+  let viewerGroupMode: 'all' | 'selected' = 'all';
+  let viewerOnlyWithLessons = true;
+  let viewerShowTeacher = false;
+  let viewerShowSubject = false;
+  let viewerShowAuditorium = true;
+  let viewerDepartmentGroups: ScheduleViewerEntity[] = [];
+  let viewerSelectedGroupIds = new Set<string>();
+  let viewerDisplayEntities: ScheduleViewerEntity[] = [];
+  let viewerLoadedEntities: ScheduleViewerEntity[] = [];
+  let viewerEventsByEntity = new Map<string, ApiItem[]>();
+  let viewerScheduleFailedIds = new Set<string>();
+  let viewerGroupCatalogLoading = false;
+  let viewerGroupCatalogError = '';
+  let viewerGroupCatalogKey = '';
+  let viewerGroupCatalogTask: Promise<void> | null = null;
+  let viewerStart: string = viewerDefaultStart;
+  let viewerFinish: string = toIso(addDays(new Date(`${viewerDefaultStart}T00:00:00`), 12));
   let viewerWeeks: ViewerWeek[] = [];
   let viewerLoading: boolean = false;
   let viewerError: string | null = null;
   let viewerHasGenerated: boolean = false;
+  async function loadViewerDepartmentGroups() {
+    const start = viewerStart;
+    const finish = viewerFinish;
+    const rangeKey = `${start}:${finish}`;
+    if (viewerGroupCatalogKey === rangeKey) return;
+    if (viewerGroupCatalogTask) {
+      await viewerGroupCatalogTask;
+      if (viewerGroupCatalogKey === rangeKey) return;
+      return loadViewerDepartmentGroups();
+    }
+
+    viewerGroupCatalogLoading = true;
+    viewerGroupCatalogError = '';
+    viewerGroupCatalogTask = (async () => {
+      try {
+        const foundGroups = await Promise.all(['МО-', 'МОм-', 'ФИТ-', 'ФИТм-'].map((term) => search(term, 'group')));
+        const groupsById = new Map<string, ScheduleViewerEntity>();
+        for (const group of foundGroups.flat()) {
+          const label = group.label.trim();
+          if (!/^(?:МО|ФИТ)м?-\d+/iu.test(label)) continue;
+          groupsById.set(group.id, { ...group, label, type: 'group' });
+        }
+        if (!groupsById.size) throw new Error('Не удалось найти группы МО и ФИТ в расписании ОмГТУ.');
+
+        const oldIds = new Set(viewerDepartmentGroups.map((group) => group.id));
+        const groups = [...groupsById.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
+        const selectedIds = new Set([...viewerSelectedGroupIds].filter((id) => groupsById.has(id)));
+        for (const group of groups) if (!oldIds.has(group.id)) selectedIds.add(group.id);
+        viewerDepartmentGroups = groups;
+        viewerSelectedGroupIds = selectedIds;
+        viewerGroupCatalogKey = rangeKey;
+        if (!groups.length) viewerGroupCatalogError = 'В расписании ОмГТУ не найдены группы МО и ФИТ.';
+      } catch (cause) {
+        viewerGroupCatalogError = cause instanceof Error ? cause.message : 'Не удалось загрузить группы кафедры ПМФИ.';
+        viewerDepartmentGroups = [];
+        viewerGroupCatalogKey = rangeKey;
+      }
+    })();
+    try { await viewerGroupCatalogTask; }
+    finally {
+      viewerGroupCatalogTask = null;
+      viewerGroupCatalogLoading = false;
+    }
+  }
+
+  function viewerScheduleEntities(): ScheduleViewerEntity[] {
+    return viewerGroupMode === 'all'
+      ? viewerDepartmentGroups
+      : viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id));
+  }
+
+  function toggleViewerGroup(id: string) {
+    const next = new Set(viewerSelectedGroupIds);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    viewerSelectedGroupIds = next;
+    if (viewerHasGenerated) void generateScheduleView();
+  }
+
+  function selectAllViewerGroups(checked: boolean) {
+    viewerSelectedGroupIds = new Set(checked ? viewerDepartmentGroups.map((group) => group.id) : []);
+    if (viewerHasGenerated) void generateScheduleView();
+  }
+
+  function applyViewerDisplayFilter() {
+    const allWeeks = buildViewerWeeks(viewerStart, viewerFinish, viewerLoadedEntities, viewerEventsByEntity);
+    viewerDisplayEntities = viewerOnlyWithLessons
+      ? viewerLoadedEntities.filter((entity) => viewerScheduleFailedIds.has(`${entity.type}:${entity.id}`) || allWeeks.some((week) => week.rows.some((row) => row.cells.some((cell) => cell.lanes.some((lane) => lane.entity.id === entity.id && lane.entity.type === entity.type && lane.lessons.length > 0)))))
+      : viewerLoadedEntities;
+    viewerWeeks = viewerOnlyWithLessons
+      ? buildViewerWeeks(viewerStart, viewerFinish, viewerDisplayEntities, viewerEventsByEntity)
+      : allWeeks;
+  }
 
   type ActiveViewerTooltip = {
     lesson: ViewerLessonDetail;
@@ -156,54 +250,36 @@
     activeViewerTooltip = null;
   }
 
-  function addScheduleViewerEntity(item: SearchItem, entityType: 'group' | 'person' | 'auditorium') {
-    if (viewerEntities.some((e) => e.id === item.id && e.type === entityType)) return;
-    viewerEntities = [
-      ...viewerEntities,
-      {
-        id: item.id,
-        label: item.label,
-        type: entityType
-      }
-    ];
-    if (viewerHasGenerated) {
-      void generateScheduleView();
-    }
-  }
-
-  function removeScheduleViewerEntity(id: string, entityType: 'group' | 'person' | 'auditorium') {
-    viewerEntities = viewerEntities.filter((e) => !(e.id === id && e.type === entityType));
-    if (viewerEntities.length === 0) {
-      viewerWeeks = [];
-      viewerHasGenerated = false;
-      return;
-    }
-    if (viewerHasGenerated) {
-      void generateScheduleView();
-    }
-  }
-
   async function generateScheduleView() {
-    if (viewerEntities.length === 0) {
-      viewerError = 'Выберите хотя бы одну группу, преподавателя или аудиторию.';
+    if (viewerGroupCatalogKey !== `${viewerStart}:${viewerFinish}`) {
+      await loadViewerDepartmentGroups();
+    }
+    const entities = viewerScheduleEntities();
+    if (entities.length === 0) {
+      viewerError = 'Выберите хотя бы одну группу МО или ФИТ.';
       return;
     }
     viewerLoading = true;
     viewerError = null;
     try {
       const entityEventsMap = new Map<string, ApiItem[]>();
+      const failedIds = new Set<string>();
       await Promise.all(
-        viewerEntities.map(async (entity) => {
+        entities.map(async (entity) => {
           try {
             const events = await getSchedule(entity.type, entity.id, viewerStart, viewerFinish);
-            entityEventsMap.set(entity.id, events);
+            entityEventsMap.set(`${entity.type}:${entity.id}`, events);
           } catch (e) {
             console.error(`Failed to load schedule for ${entity.label}:`, e);
-            entityEventsMap.set(entity.id, []);
+            failedIds.add(`${entity.type}:${entity.id}`);
+            entityEventsMap.set(`${entity.type}:${entity.id}`, []);
           }
         })
       );
-      viewerWeeks = buildViewerWeeks(viewerStart, viewerFinish, viewerEntities, entityEventsMap);
+      viewerLoadedEntities = entities;
+      viewerEventsByEntity = entityEventsMap;
+      viewerScheduleFailedIds = failedIds;
+      applyViewerDisplayFilter();
       viewerHasGenerated = true;
     } catch (e: any) {
       viewerError = e?.message ?? 'Не удалось загрузить расписание для выбранных объектов';
@@ -627,7 +703,7 @@
     showSelectedModal = false;
   }
 
-  function go(next: Page) { if (next !== page) { invalidate(); auditoriums = []; } if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2); page = next; window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  function go(next: Page) { if (next !== page) { invalidate(); auditoriums = []; } if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2); page = next; if (next === 'schedule') void loadViewerDepartmentGroups().then(generateScheduleView); window.scrollTo({ top: 0, behavior: 'smooth' }); }
   function dateShort(value: string) { return formatDate(value, { day: '2-digit', month: '2-digit' }); }
   function freeCommission(cell: Cell) { return cell.commission.filter((entry) => entry.available).map((entry) => entry.person.label); }
   function commissionReason(reason: 'free' | 'busy' | 'no-lessons' | 'load-error') { return reason === 'free' ? (page === 'substitutions' ? 'может заменить' : 'может присутствовать') : reason === 'busy' ? 'занят в это время' : reason === 'no-lessons' ? 'нет пар в этот день' : 'расписание не загрузилось'; }
@@ -877,7 +953,7 @@
         </div>
       </section>
     {:else if page === 'substitutions'}
-      <Substitutions />
+        <Substitutions on:home={() => go('home')} />
     {:else if page === 'consultations' || page === 'retakes' || page === 'meetings'}
       <div class="workspace">
         <div class="breadcrumb"><button type="button" on:click={() => go('home')}>Главная</button><span>/</span><span>{page === 'retakes' ? 'Пересдачи' : uiPage === 'substitutions' ? 'Замены' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</span></div>
@@ -1199,157 +1275,62 @@
         </div>
       {/if}
     {:else if page === 'schedule'}
-      <div class="workspace workspace-fluid">
-        <div class="breadcrumb">
-          <button type="button" on:click={() => go('home')}>Главная</button>
-          <span>/</span>
-          <span>Расписание</span>
-        </div>
-        <section class="workspace-heading">
-          <div>
-            <span class="section-kicker">ПРОСМОТР / 05</span>
-            <h1>Сравнение расписания<span class="heading-period">.</span></h1>
-            <p>Просматривайте и сравнивайте расписание групп, преподавателей и аудиторий в едином календаре.</p>
-          </div>
-          <div class="heading-decoration" aria-hidden="true">▦</div>
-        </section>
-
-        <div class="workspace-layout viewer-layout">
-          <aside class="controls-panel">
-            <div class="panel-top">
-              <span class="panel-number">01 — ВЫБОР ОБЪЕКТОВ</span>
-              <h2>Кого и что сравнить?</h2>
-            </div>
-
-            <div class="field-block">
+      <PlannerPageFrame section="ПРОСМОТР" sectionNumber="05" breadcrumb="Расписание" title="Расписание" description="Расписание групп МО и ФИТ на выбранный период" icon="▦" on:home={() => go('home')}>
+          <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания" className={viewerGroupMode === 'selected' ? 'viewer-controls viewer-top-controls has-group-selection' : 'viewer-controls viewer-top-controls'}>
+            <div class="field-block viewer-stream-picker">
               <div class="field-head">
-                <label>Добавить в расписание</label>
-                <span>01</span>
+                <label>Группы МО и ФИТ</label>
+                <span>{viewerGroupCatalogLoading ? '…' : viewerHasGenerated ? `${viewerDisplayEntities.length} из ${viewerScheduleEntities().length}` : viewerScheduleEntities().length}</span>
               </div>
-              <div class="commission-choice" role="group" aria-label="Тип объекта">
-                <button
-                  type="button"
-                  class:active={viewerActiveType === 'group'}
-                  aria-pressed={viewerActiveType === 'group'}
-                  on:click={() => (viewerActiveType = 'group')}
-                >
-                  Группа
-                </button>
-                <button
-                  type="button"
-                  class:active={viewerActiveType === 'person'}
-                  aria-pressed={viewerActiveType === 'person'}
-                  on:click={() => (viewerActiveType = 'person')}
-                >
-                  Преподаватель
-                </button>
-                <button
-                  type="button"
-                  class:active={viewerActiveType === 'auditorium'}
-                  aria-pressed={viewerActiveType === 'auditorium'}
-                  on:click={() => (viewerActiveType = 'auditorium')}
-                >
-                  Аудитория
-                </button>
+              <div class="viewer-stream-controls">
+                <div class="commission-choice" role="group" aria-label="Выбор групп ПМФИ">
+                  <button type="button" class:active={viewerGroupMode === 'all'} aria-pressed={viewerGroupMode === 'all'} on:click={() => { viewerGroupMode = 'all'; if (viewerHasGenerated) void generateScheduleView(); }}>Все группы</button>
+                  <button type="button" class:active={viewerGroupMode === 'selected'} aria-pressed={viewerGroupMode === 'selected'} on:click={() => { viewerGroupMode = 'selected'; if (viewerHasGenerated) void generateScheduleView(); }}>Выбрать группы</button>
+                </div>
               </div>
-
-              {#if viewerActiveType === 'group'}
-                <SearchField
-                  type="group"
-                  placeholder="Например, ФИТ-211 или М-251"
-                  onPick={(item) => addScheduleViewerEntity(item, 'group')}
-                />
-              {:else if viewerActiveType === 'person'}
-                <SearchField
-                  type="person"
-                  placeholder="Начните вводить ФИО преподавателя"
-                  onPick={(item) => addScheduleViewerEntity(item, 'person')}
-                />
-              {:else}
-                <SearchField
-                  type="auditorium"
-                  placeholder="Номер или название, напр. 6-308"
-                  onPick={(item) => addScheduleViewerEntity(item, 'auditorium')}
-                />
-              {/if}
-
-              {#if viewerEntities.length}
-                <div class="group-chips">
-                  {#each viewerEntities as entity (entity.id + entity.type)}
-                    <span class="group-chip">
-                      {entity.type === 'auditorium' ? `Ауд. ${entity.label}` : entity.type === 'person' ? `Преп. ${entity.label}` : entity.label}
-                      <button
-                        type="button"
-                        on:click={() => removeScheduleViewerEntity(entity.id, entity.type)}
-                        aria-label={`Удалить ${entity.label}`}
-                      >×</button>
-                    </span>
+              {#if viewerGroupCatalogLoading}
+                <span class="viewer-catalog-loading"><i></i>Загружаем группы МО и ФИТ…</span>
+              {:else if viewerGroupCatalogError}
+                <p class="form-error">{viewerGroupCatalogError}</p>
+                <button class="viewer-stream-retry" type="button" on:click={() => { viewerGroupCatalogKey = ''; void loadViewerDepartmentGroups(); }}>Повторить загрузку</button>
+              {:else if viewerGroupMode === 'selected'}
+                <div class="viewer-stream-actions"><span>Выбрано {viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id)).length} из {viewerDepartmentGroups.length}</span><span><button type="button" on:click={() => selectAllViewerGroups(true)}>Выбрать все</button><button type="button" on:click={() => selectAllViewerGroups(false)}>Снять выбор</button></span></div>
+                <div class="viewer-stream-list" aria-label="Группы кафедры ПМФИ">
+                  {#each viewerDepartmentGroups as group (group.id)}
+                    <label><input type="checkbox" checked={viewerSelectedGroupIds.has(group.id)} on:change={() => toggleViewerGroup(group.id)} /><span>{group.label}</span></label>
                   {/each}
                 </div>
-              {:else}
-                <p class="field-hint">Добавьте группы, преподавателей или аудитории для совместного просмотра</p>
               {/if}
             </div>
 
-            <div class="field-block date-block">
-              <div class="field-head">
-                <label>Период</label>
-                <span>02</span>
-              </div>
-              <div class="date-fields">
-                <div>
-                  <label for="viewer-start-date">С</label>
-                  <input
-                    id="viewer-start-date"
-                    type="date"
-                    bind:value={viewerStart}
-                    on:change={() => {
-                      if (viewerHasGenerated) void generateScheduleView();
-                    }}
-                  />
-                </div>
-                <div>
-                  <label for="viewer-end-date">ПО</label>
-                  <input
-                    id="viewer-end-date"
-                    type="date"
-                    min={viewerStart}
-                    bind:value={viewerFinish}
-                    on:change={() => {
-                      if (viewerHasGenerated) void generateScheduleView();
-                    }}
-                  />
-                </div>
-              </div>
-            </div>
+            <div class="sub-filter viewer-date-filter viewer-start-filter"><label for="viewer-start-date">Период с</label><input id="viewer-start-date" type="date" bind:value={viewerStart} on:change={() => viewerHasGenerated ? void generateScheduleView() : void loadViewerDepartmentGroups()} /></div>
+            <div class="sub-filter viewer-date-filter viewer-end-filter"><label for="viewer-end-date">по</label><input id="viewer-end-date" type="date" min={viewerStart} bind:value={viewerFinish} on:change={() => viewerHasGenerated ? void generateScheduleView() : void loadViewerDepartmentGroups()} /></div>
             {#if viewerStart && viewerFinish && viewerStart > viewerFinish}
               <p class="form-error">Дата окончания раньше даты начала.</p>
             {/if}
 
             <button
               class="primary-button generate-button"
+              class:viewer-generate-button={viewerGroupMode === 'selected'}
               type="button"
-              disabled={viewerLoading || viewerEntities.length === 0 || viewerStart > viewerFinish}
+              disabled={viewerLoading || viewerGroupCatalogLoading || viewerScheduleEntities().length === 0 || viewerStart > viewerFinish}
               on:click={generateScheduleView}
             >{viewerLoading ? 'Загружаем расписание…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
 
-            <div class="panel-note">
-              <span>ⓘ</span>
-              <p>Каждая ячейка календаря разделена по горизонтали на строки для каждого выбранного участника.</p>
+          </PlannerFilterBar>
+          <PlannerToolbar slot="toolbar" ariaLabel="Обозначения и настройки расписания">
+            <div slot="legend" class="planner-toolbar-legend legend viewer-schedule-legend">
+              <span><i class="legend-dot free"></i>Свободно</span>
+              <span><i class="legend-dot selected"></i>Занятие</span>
+              <span>Подробности о паре — при наведении</span>
             </div>
-          </aside>
-
-          <section class="results-panel viewer-results" aria-live="polite">
-            <div class="results-header">
-              <div>
-                <span class="panel-number">02 — РЕЗУЛЬТАТ</span>
-                <h2>Сравнительное расписание</h2>
-              </div>
-              {#if viewerHasGenerated}
-                <span class="week-count">{viewerWeeks.length} {viewerWeeks.length === 1 ? 'неделя' : viewerWeeks.length < 5 ? 'недели' : 'недель'}</span>
-              {/if}
+            <div slot="options" class="planner-toolbar-options viewer-display-options" aria-label="Отображение информации о занятиях">
+              <label class="viewer-active-only" class:active={viewerOnlyWithLessons}><input type="checkbox" bind:checked={viewerOnlyWithLessons} on:change={applyViewerDisplayFilter} /><span>Только группы с парами</span></label>
+              <label class:active={viewerShowTeacher}><input type="checkbox" bind:checked={viewerShowTeacher} /> Отображать преподавателя</label>
+              <label class:active={viewerShowSubject}><input type="checkbox" bind:checked={viewerShowSubject} /> Отображать название</label>
+              <label class:active={viewerShowAuditorium}><input type="checkbox" bind:checked={viewerShowAuditorium} /> Отображать аудиторию</label>
             </div>
-
+          </PlannerToolbar>
             {#if viewerError}
               <div class="state-card error-card">
                 <span class="state-icon">!</span>
@@ -1357,11 +1338,23 @@
                 <p>{viewerError}</p>
                 <button type="button" on:click={generateScheduleView}>Повторить запрос ↗</button>
               </div>
+            {:else if viewerGroupCatalogLoading}
+              <div class="state-card">
+                <span class="state-icon loading-icon">◷</span>
+                <h3>Загружаем группы кафедры</h3>
+                <p>Загружаем список групп МО и ФИТ из расписания ОмГТУ.</p>
+              </div>
             {:else if viewerLoading}
               <div class="state-card">
                 <span class="state-icon loading-icon">◷</span>
                 <h3>Сопоставляем расписания</h3>
-                <p>Загружаем данные для выбранных групп, преподавателей и аудиторий из расписания ОмГТУ...</p>
+                <p>Загружаем расписания выбранных групп из расписания ОмГТУ...</p>
+              </div>
+            {:else if viewerHasGenerated && viewerDisplayEntities.length === 0}
+              <div class="state-card empty-card">
+                <span class="state-icon">◷</span>
+                <h3>Нет групп с парами</h3>
+                <p>За выбранный период у выбранных групп занятий нет. Отключите фильтр, чтобы показать все группы.</p>
               </div>
             {:else if !viewerHasGenerated}
               <div class="state-card empty-card">
@@ -1372,15 +1365,9 @@
                   <span>04</span>
                 </div>
                 <h3>Здесь появится расписание</h3>
-                <p>Выберите участников или аудитории, укажите даты и нажмите «Показать расписание».</p>
+                <p>Расписание появится здесь после выбора групп и нажатия «Показать расписание».</p>
               </div>
             {:else}
-              <div class="legend">
-                <span><i class="legend-dot free"></i>Свободно</span>
-                <span><i class="legend-dot selected"></i>Занятие</span>
-                <span>Подробности о паре — при наведении</span>
-              </div>
-
               {#each viewerWeeks as week, index (week.monday)}
                 <div class="week-block">
                   <div class="week-title">
@@ -1420,13 +1407,13 @@
                                 </div>
                               {:else}
                                 <div class="viewer-lines-stack">
-                                  {#each cell.lanes as lane (lane.entity.id + lane.entity.type)}
+                                  {#each cell.lanes.filter((lane) => !viewerOnlyWithLessons || lane.lessons.length > 0) as lane (lane.entity.id + lane.entity.type)}
                                     <div
                                       class="viewer-entity-line"
                                       class:line-free={lane.isFree}
                                       class:line-busy={!lane.isFree}
                                     >
-                                      {#if viewerEntities.length > 1}
+                                      {#if viewerDisplayEntities.length > 1}
                                         <span class="viewer-line-entity" title={lane.entity.label}>
                                           {lane.entity.type === 'person' ? formatShortName(lane.entity.label) : lane.entity.label}:
                                         </span>
@@ -1447,23 +1434,23 @@
                                               on:focus={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
                                               on:blur={hideViewerTooltip}
                                             >
-                                              {#if lesson.kindOfWork}
+                                              {#if viewerShowSubject && lesson.kindOfWork}
                                                 <span class="viewer-kind-prefix">{formatLessonKindShort(lesson.kindOfWork)}</span>
                                               {/if}
-                                              <strong class="viewer-lesson-title" title={lesson.discipline}>{lesson.discipline}</strong>
+                                              {#if viewerShowSubject}<strong class="viewer-lesson-title" title={lesson.discipline}>{lesson.discipline}</strong>{/if}
                                               <span class="viewer-lesson-details">
                                                 {#if lesson.subgroup}
                                                   <span class="viewer-subgroup-info">п. {lesson.subgroup}</span>
                                                 {/if}
                                                 {#if lane.entity.type === 'group'}
-                                                  {#if lesson.auditorium}
+                                                  {#if viewerShowAuditorium && lesson.auditorium}
                                                     <span class="viewer-aud-info">ауд. {lesson.auditorium}</span>
                                                   {/if}
-                                                  {#if lesson.lecturer}
+                                                  {#if viewerShowTeacher && lesson.lecturer}
                                                     <span class="viewer-person-info" title={lesson.lecturer}>{lesson.lecturer}</span>
                                                   {/if}
                                                 {:else if lane.entity.type === 'person'}
-                                                  {#if lesson.auditorium}
+                                                  {#if viewerShowAuditorium && lesson.auditorium}
                                                     <span class="viewer-aud-info">ауд. {lesson.auditorium}</span>
                                                   {/if}
                                                   {#if lesson.group}
@@ -1473,7 +1460,7 @@
                                                   {#if lesson.group}
                                                     <span class="viewer-person-info" title={lesson.group}>{lesson.group}</span>
                                                   {/if}
-                                                  {#if lesson.lecturer}
+                                                  {#if viewerShowTeacher && lesson.lecturer}
                                                     <span class="viewer-person-info" title={lesson.lecturer}>{lesson.lecturer}</span>
                                                   {/if}
                                                 {/if}
@@ -1495,9 +1482,7 @@
                 </div>
               {/each}
             {/if}
-          </section>
-        </div>
-      </div>
+      </PlannerPageFrame>
     {/if}
   </main>
 

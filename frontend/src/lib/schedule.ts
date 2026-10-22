@@ -175,7 +175,7 @@ export async function search(term: string, type: 'person' | 'group' | 'auditoriu
 }
 
 export async function getSchedule(type: 'person' | 'group' | 'auditorium', id: string, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
-  const params = new URLSearchParams({ start: start.replaceAll('-', '.'), finish: finish.replaceAll('-', '.'), lng: '1' });
+  const params = new URLSearchParams({ start, finish, lng: '1' });
   return getJson(`/schedule/${type}/${encodeURIComponent(id)}?${params}`, signal);
 }
 
@@ -259,7 +259,7 @@ export async function getAuditoriums(buildingOid?: number, signal?: AbortSignal)
 }
 
 export async function getBuildingSchedule(buildingOid: number, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
-  const params = new URLSearchParams({ start: start.replaceAll('-', '.'), finish: finish.replaceAll('-', '.'), lng: '1' });
+  const params = new URLSearchParams({ start, finish, lng: '1' });
   return getJson(`/schedule/building/${encodeURIComponent(buildingOid)}?${params}`, signal);
 }
 
@@ -412,6 +412,26 @@ function extractGroup(event: ApiItem): string | undefined {
   const str = String(raw).trim();
   if (!str || str.toLowerCase() === 'null') return undefined;
   return str;
+}
+
+function extractSubgroups(event: ApiItem): string | undefined {
+  const values: string[] = [];
+  const add = (value: unknown) => {
+    if (value == null || typeof value === 'object') return;
+    const text = String(value).trim();
+    if (text && text.toLowerCase() !== 'null' && !values.includes(text)) values.push(text);
+  };
+  add(event.subGroup);
+  add(event.subgroup);
+  add(event.subgroupName);
+  add(event.subGroupName);
+  if (Array.isArray(event.listSubGroups)) {
+    for (const subgroup of event.listSubGroups) {
+      if (isRecord(subgroup)) add(subgroup.subgroup ?? subgroup.subGroup ?? subgroup.name ?? subgroup.label);
+      else add(subgroup);
+    }
+  }
+  return values.length ? values.join(', ') : undefined;
 }
 
 export function extractLessonDetail(event: ApiItem): LessonDetail {
@@ -805,7 +825,10 @@ export function buildViewerWeeks(
   entities: ScheduleViewerEntity[],
   entityEventsMap: Map<string, ApiItem[]>
 ): ViewerWeek[] {
-  const indexed = new Map(entities.map((e) => [e.id, indexEvents(entityEventsMap.get(e.id) ?? [])]));
+  const indexed = new Map(entities.map((e) => {
+    const typedKey = `${e.type}:${e.id}`;
+    return [typedKey, indexEvents(entityEventsMap.get(typedKey) ?? entityEventsMap.get(e.id) ?? [])];
+  }));
   const startDate = fromIso(start);
   const monday = addDays(startDate, -((startDate.getDay() + 6) % 7));
   const weeks: ViewerWeek[] = [];
@@ -821,7 +844,7 @@ export function buildViewerWeeks(
         cells: dates.map((date) => {
           const outOfRange = date < start || date > finish;
           const lanes: ViewerCellLane[] = entities.map((entity) => {
-            const dailyEvents = indexed.get(entity.id)?.byDate.get(date) ?? [];
+            const dailyEvents = indexed.get(`${entity.type}:${entity.id}`)?.byDate.get(date) ?? [];
             const matched = outOfRange ? [] : slotEvents(dailyEvents, slot);
             const lessons: ViewerLessonDetail[] = matched.map((event) => {
               const discipline = extractDiscipline(event);
@@ -830,7 +853,7 @@ export function buildViewerWeeks(
               const group = extractGroup(event);
               const kindOfWork = event.kindOfWork ? String(event.kindOfWork).trim() : undefined;
               const building = event.building ? String(event.building).trim() : undefined;
-              const subgroup = (event.subGroup || event.subgroup) ? String(event.subGroup || event.subgroup).trim() : undefined;
+              const subgroup = extractSubgroups(event);
               const timeStart = event.beginLesson ? String(event.beginLesson).trim() : slot.start;
               const timeEnd = event.endLesson ? String(event.endLesson).trim() : slot.end;
               return {

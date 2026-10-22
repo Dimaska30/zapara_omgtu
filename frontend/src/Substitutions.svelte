@@ -2,6 +2,9 @@
   import { onMount } from 'svelte';
   import CustomSelect from './CustomSelect.svelte';
   import SearchField from './SearchField.svelte';
+  import PlannerPageFrame from './PlannerPageFrame.svelte';
+  import PlannerFilterBar from './PlannerFilterBar.svelte';
+  import PlannerToolbar from './PlannerToolbar.svelte';
   import { COMMISSION_GROUPS } from './lib/commission';
   import {
     SLOTS,
@@ -41,6 +44,7 @@
   let activeOnly = true;
   let showSubjects = false;
   let showGroups = false;
+  let showAuditoriums = false;
   let activeLessonTooltip: HoverLesson | null = null;
   let teachers: SearchItem[] = [];
   let weeks: ViewerWeek[] = [];
@@ -61,6 +65,7 @@
   let topicFailedIds = new Set<string>();
   let otherFailedIds = new Set<string>();
   let topicLoading = false;
+  let topicRequestId = 0;
   let notice = '';
   let rowStatusIndex = new Map<string, TeacherSlot>();
   $: rowStatusIndex = indexRows(rows);
@@ -207,6 +212,8 @@
   }
 
   function openReplacement(teacher: SearchItem, date: string, slot: Slot, lesson: ViewerLessonDetail) {
+    topicRequestId++;
+    topicLoading = false;
     activeLessonTooltip = null;
     selectedLesson = { teacher, date, slot, lesson };
     pickedReplacement = null;
@@ -266,14 +273,36 @@
   }))) : [];
 
   async function chooseTopic(id: string) {
+    const requestId = ++topicRequestId;
     topicId = id;
+    topicLoading = false;
     topicSchedules = new Map();
     topicFailedIds = new Set();
     if (!id || !selectedLesson) return;
     const people = COMMISSION_GROUPS.find((group) => group.id === id)?.people.filter((person) => person.id !== selectedLesson?.teacher.id) ?? [];
+    const departmentIds = new Set(teachers.map((person) => person.id));
+    const cachedSchedules = new Map<string, ApiItem[]>();
+    const cachedFailures = new Set<string>();
+    for (const person of people) {
+      if (!departmentIds.has(person.id)) continue;
+      const schedule = eventsByTeacher.get(person.id);
+      if (schedule) cachedSchedules.set(person.id, schedule);
+      if (failedTeacherIds.has(person.id)) cachedFailures.add(person.id);
+    }
+    topicSchedules = cachedSchedules;
+    topicFailedIds = cachedFailures;
+
+    const remainingPeople = people.filter((person) => !departmentIds.has(person.id));
+    if (!remainingPeople.length) return;
     topicLoading = true;
-    try { const loaded = await fetchSchedules(people, start, finish); topicSchedules = loaded.events; topicFailedIds = loaded.failed; }
-    finally { topicLoading = false; }
+    try {
+      const loaded = await fetchSchedules(remainingPeople, start, finish);
+      if (requestId !== topicRequestId) return;
+      topicSchedules = new Map([...cachedSchedules, ...loaded.events]);
+      topicFailedIds = new Set([...cachedFailures, ...loaded.failed]);
+    } finally {
+      if (requestId === topicRequestId) topicLoading = false;
+    }
   }
 
   async function addOther(person: SearchItem) {
@@ -313,28 +342,31 @@
   onMount(() => { void refreshBoard(); });
 </script>
 
-<div class="workspace substitution-workspace">
-  <div class="breadcrumb"><span>Главная</span><span>/</span><span>Замены</span></div>
-  <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / 03</span><h1>Замены занятий<span class="heading-period">.</span></h1><p>Найдите занятие на кафедре и подберите свободного коллегу для замены.</p></div><div class="heading-decoration" aria-hidden="true">⇄</div></section>
-
-  <section class="substitution-controls" aria-label="Фильтры расписания замен">
+<PlannerPageFrame section="ПЛАНИРОВАНИЕ" sectionNumber="03" breadcrumb="Замены" title="Замены занятий" description="Найдите занятие на кафедре и подберите свободного коллегу для замены" icon="⇄" on:home>
+  <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания замен">
     <div class="sub-filter department-filter"><span class="sub-filter-label">Кафедра</span><span class="department-value">ПМФИ</span></div>
     <div class="sub-filter"><label for="sub-start">Период с</label><input id="sub-start" type="date" bind:value={start} /></div>
     <div class="sub-filter"><label for="sub-finish">по</label><input id="sub-finish" type="date" min={start} bind:value={finish} /></div>
     <button class="primary-button sub-load-button" type="button" disabled={loading || start > finish} on:click={refreshBoard}>{loading ? 'Загружаем…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
-  </section>
+  </PlannerFilterBar>
 
-  <div class="substitution-legend" aria-label="Обозначения расписания">
-    <span><i class="sub-legend-dot free"></i>Свободен, без окон</span>
-    <span><i class="sub-legend-dot window"></i>Свободен, окно</span>
-    <span><i class="sub-legend-dot no-lessons"></i>Нет пар сегодня</span>
-    <span><i class="sub-legend-dot busy"></i>Занятие · нажмите для замены</span>
-    <div class="sub-display-options" aria-label="Настройки отображения расписания">
+  <PlannerToolbar slot="toolbar" ariaLabel="Обозначения и настройки расписания">
+    <div slot="legend" class="planner-toolbar-legend substitution-legend">
+      <span><i class="sub-legend-dot free"></i>Свободен, без окон</span>
+      <span><i class="sub-legend-dot window"></i>Свободен, окно</span>
+      <span><i class="sub-legend-dot no-lessons"></i>Нет пар сегодня</span>
+      <span><i class="sub-legend-dot busy"></i>Занятие · нажмите для замены</span>
+    </div>
+    <div slot="options" class="planner-toolbar-options sub-display-options" aria-label="Настройки отображения расписания">
       <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только пары с занятиями</label>
       <label class="sub-display-option" class:active={showSubjects}><input type="checkbox" bind:checked={showSubjects} /> Отображать предметы</label>
       <label class="sub-display-option" class:active={showGroups}><input type="checkbox" bind:checked={showGroups} /> Отображать группы</label>
+      <label class="sub-display-option" class:active={showAuditoriums}><input type="checkbox" bind:checked={showAuditoriums} /> Отображать аудитории</label>
     </div>
-  </div>
+  </PlannerToolbar>
+  {#if failedTeacherIds.size}
+    <p class="warning-note">Не удалось загрузить расписание {failedTeacherIds.size} преподавателей. Их строки оставлены в таблице с отметкой «Нет данных».</p>
+  {/if}
 
   {#if error}<div class="sub-state error">{error}</div>
   {:else if loading && !hasLoaded}<div class="sub-state">Загружаю преподавателей кафедры и их расписания…</div>
@@ -353,7 +385,7 @@
               <div class="table-row" role="row">
                 <div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                 {#each row.cells as cell (cell.key)}
-                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status === 'busy') : cell.lanes}
+                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => ['busy', 'error'].includes(teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status ?? '')) : cell.lanes}
                   <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:out-of-range={cell.outOfRange}>
                     {#if cell.outOfRange}
                       <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
@@ -362,12 +394,13 @@
                         {#each visibleLanes as lane (lane.entity.id)}
                           {@const state = teacherSlot(cell.date, row.slot.number, lane.entity.id)}
                           {#if state}
-                            <div class="viewer-entity-line sub-teacher-line" class:details-lines={showSubjects || showGroups} role="button" aria-disabled={state.status !== 'busy'} tabindex={state.status === 'busy' ? 0 : -1} aria-label={`${state.teacher.label}${state.lessons[0] ? `: ${lessonTitle(state.lessons[0])}` : ''}`} class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'} on:mouseenter={(event) => state.lessons[0] && showLessonTooltip(event, state.lessons[0], state.teacher, cell.date, row.slot)} on:mouseleave={() => activeLessonTooltip = null} on:click={(event) => state.status === 'busy' && openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons)} on:keydown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget && state.status === 'busy') { event.preventDefault(); openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons); } }}>
+                            <div class="viewer-entity-line sub-teacher-line" class:details-lines={showSubjects || showGroups || showAuditoriums} role="button" aria-disabled={state.status !== 'busy'} tabindex={state.status === 'busy' ? 0 : -1} aria-label={`${state.teacher.label}${state.lessons[0] ? `: ${lessonTitle(state.lessons[0])}` : ''}`} class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'} on:mouseenter={(event) => state.lessons[0] && showLessonTooltip(event, state.lessons[0], state.teacher, cell.date, row.slot)} on:mouseleave={() => activeLessonTooltip = null} on:click={(event) => state.status === 'busy' && openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons)} on:keydown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget && state.status === 'busy') { event.preventDefault(); openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons); } }}>
                               <span class="viewer-line-entity" title={lane.entity.label}>{formatShortName(lane.entity.label)}:</span>
                               {#if state.status === 'busy'}
-                                {#if showSubjects || showGroups}<div class="viewer-line-lessons">
+                                {#if showSubjects || showGroups || showAuditoriums}<div class="viewer-line-lessons">
                                   {#if showSubjects}<div class="sub-metadata-line sub-subjects">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.discipline}>{lesson.discipline}</span>{/each}</div>{/if}
                                   {#if showGroups}<div class="sub-metadata-line sub-groups">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.group}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.group}>{lesson.group}{#if lesson.subgroup} · подгр. {lesson.subgroup}{/if}</span>{/if}{/each}</div>{/if}
+                                  {#if showAuditoriums}<div class="sub-metadata-line sub-auditoriums">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.auditorium}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={`ауд. ${lesson.auditorium}`}>ауд. {lesson.auditorium}</span>{/if}{/each}</div>{/if}
                                 </div>{/if}
                               {:else}
                                 <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? 'Окно' : state.status === 'error' ? 'Нет данных' : 'Нет пар сегодня'}</span>
@@ -386,7 +419,7 @@
       </section>
     {/each}
   {/if}
-</div>
+</PlannerPageFrame>
 
 {#if selectedLesson}
   <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) selectedLesson = null; }} on:keydown={(event) => event.key === 'Escape' && (selectedLesson = null)}>
@@ -457,12 +490,9 @@
 
 <style>
   .substitution-workspace{max-width:1600px}
-  .substitution-controls{display:grid;grid-template-columns:minmax(280px,1.5fr) minmax(155px,.7fr) minmax(155px,.7fr) auto;align-items:end;gap:12px;background:#fff;border:1px solid #e4eae3;border-radius:9px;padding:12px 14px;margin:0 0 14px}
-  .sub-filter{display:flex;flex-direction:column;gap:5px;min-width:0}.sub-filter label,.sub-filter-label{font-size:10px;font-weight:700;color:#718279}.sub-filter input{height:36px;min-width:0;border:1px solid #dce5de;border-radius:6px;background:#fbfdfb;padding:0 9px;color:#25463a;font:inherit;font-size:11px}.department-value{height:36px;display:flex;align-items:center;padding:0 10px;border:1px solid #dce5de;border-radius:6px;background:#f5f8f4;color:#25463a;font-size:11px;font-weight:700}.sub-load-button{height:36px;padding:0 13px;white-space:nowrap;font-size:10px}
-  .substitution-legend{display:flex;align-items:center;flex-wrap:wrap;gap:9px 20px;padding:0 2px;margin:0 0 15px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
+  .substitution-legend{gap:9px 20px;padding:0 2px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
   .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
-  @media(max-width:900px){.substitution-controls{grid-template-columns:minmax(180px,1.3fr) 1fr 1fr}.sub-load-button{grid-column:3;justify-self:stretch;justify-content:center}}
-  @media(max-width:560px){.substitution-controls{grid-template-columns:1fr 1fr}.department-filter{grid-column:span 2}.sub-load-button{grid-column:span 2;width:100%}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
+  @media(max-width:560px){.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}}
 </style>
