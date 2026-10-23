@@ -144,6 +144,7 @@
   let viewerShowSubject = false;
   let viewerShowAuditorium = true;
   let viewerDepartmentGroups: ScheduleViewerEntity[] = [];
+  let viewerGroupColumns: { year: string; groups: ScheduleViewerEntity[] }[] = [];
   let viewerSelectedGroupIds = new Set<string>();
   let viewerDisplayEntities: ScheduleViewerEntity[] = [];
   let viewerLoadedEntities: ScheduleViewerEntity[] = [];
@@ -159,6 +160,22 @@
   let viewerLoading: boolean = false;
   let viewerError: string | null = null;
   let viewerHasGenerated: boolean = false;
+
+  function groupViewerGroupsByYear(groups: ScheduleViewerEntity[]) {
+    const columns = new Map<string, ScheduleViewerEntity[]>();
+    for (const group of groups) {
+      const year = group.label.match(/-(\d{2})\d/u)?.[1] ?? 'Другие';
+      const items = columns.get(year) ?? [];
+      items.push(group);
+      columns.set(year, items);
+    }
+    return [...columns.entries()]
+      .sort(([a], [b]) => a === 'Другие' ? 1 : b === 'Другие' ? -1 : Number(a) - Number(b))
+      .map(([year, items]) => ({ year, groups: items }));
+  }
+
+  $: viewerGroupColumns = groupViewerGroupsByYear(viewerDepartmentGroups);
+
   async function loadViewerDepartmentGroups() {
     const start = viewerStart;
     const finish = viewerFinish;
@@ -1288,8 +1305,13 @@
               {:else if viewerGroupMode === 'selected'}
                 <div class="viewer-stream-actions"><span>Выбрано {viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id)).length} из {viewerDepartmentGroups.length}</span><span><button type="button" on:click={() => selectAllViewerGroups(true)}>Выбрать все</button><button type="button" on:click={() => selectAllViewerGroups(false)}>Снять выбор</button></span></div>
                 <div class="viewer-stream-list" aria-label="Группы кафедры ПМФИ">
-                  {#each viewerDepartmentGroups as group (group.id)}
-                    <label><input type="checkbox" checked={viewerSelectedGroupIds.has(group.id)} on:change={() => toggleViewerGroup(group.id)} /><span>{group.label}</span></label>
+                  {#each viewerGroupColumns as column (column.year)}
+                    <div class="viewer-stream-cohort">
+                      <h3>{column.year === 'Другие' ? column.year : `${column.year} год`}</h3>
+                      {#each column.groups as group (group.id)}
+                        <label><input type="checkbox" checked={viewerSelectedGroupIds.has(group.id)} on:change={() => toggleViewerGroup(group.id)} /><span>{group.label}</span></label>
+                      {/each}
+                    </div>
                   {/each}
                 </div>
               {/if}

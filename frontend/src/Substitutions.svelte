@@ -29,6 +29,7 @@
   type TeacherSlot = { teacher: SearchItem; status: Status; lessons: ViewerLessonDetail[]; windowPairs: number };
   type BoardRow = { date: string; slot: Slot; teachers: TeacherSlot[] };
   type SelectedLesson = { teacher: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
+  type SlotReplacementPick = { replacement: SearchItem; date: string; slot: Slot; target: SelectedLesson | null };
   type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number };
   type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
   type ConfirmedReplacement = { key: string; originalTeacher: SearchItem; replacement: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
@@ -61,6 +62,7 @@
   let error = '';
   let hasLoaded = false;
   let selectedLesson: SelectedLesson | null = null;
+  let slotReplacementPick: SlotReplacementPick | null = null;
   let pickedReplacement: SearchItem | null = null;
   let confirmedReplacements: ConfirmedReplacement[] = [];
   let showConfirmedReplacements = false;
@@ -220,6 +222,7 @@
   }
 
   function openReplacement(teacher: SearchItem, date: string, slot: Slot, lesson: ViewerLessonDetail) {
+    slotReplacementPick = null;
     topicRequestId++;
     topicLoading = false;
     activeLessonTooltip = null;
@@ -231,6 +234,30 @@
     topicSchedules = new Map();
     otherSchedules = new Map();
     notice = '';
+  }
+
+  function openSlotReplacementPick(replacement: SearchItem, date: string, slot: Slot) {
+    const row = rows.find((item) => item.date === date && item.slot.number === slot.number);
+    const hasTargets = row?.teachers.some((item) => item.status === 'busy' && item.teacher.id !== replacement.id && item.lessons.length) ?? false;
+    if (!hasTargets) {
+      boardNotice = `На ${slot.number}-й паре ${formatDate(date)} нет занятий, которым нужна замена.`;
+      return;
+    }
+    activeLessonTooltip = null;
+    selectedLesson = null;
+    pickedReplacement = null;
+    slotReplacementPick = { replacement, date, slot, target: null };
+    notice = '';
+  }
+
+  function slotReplacementTargets(pick: SlotReplacementPick): SelectedLesson[] {
+    const row = rows.find((item) => item.date === pick.date && item.slot.number === pick.slot.number);
+    const targets: SelectedLesson[] = [];
+    for (const item of row?.teachers ?? []) {
+      if (item.status !== 'busy' || item.teacher.id === pick.replacement.id) continue;
+      for (const lesson of item.lessons) targets.push({ teacher: item.teacher, date: pick.date, slot: pick.slot, lesson });
+    }
+    return targets;
   }
 
   function openClickedLesson(event: Event, teacher: SearchItem, date: string, slot: Slot, lessons: ViewerLessonDetail[]) {
@@ -348,7 +375,18 @@
 
   function candidateStatusText(candidate: Candidate) {
     const { status, windowPairs = 0 } = candidate;
-    return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? `Окно (${formatPairCount(windowPairs)})` : status === 'no-lessons' ? 'нет пар сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
+    return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? `Окно (${formatPairCount(windowPairs)})` : status === 'no-lessons' ? 'нет занятий сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
+  }
+
+  function teacherActionLabel(state: TeacherSlot) {
+    if (state.status === 'busy') return `${state.teacher.label}: ${lessonTitle(state.lessons[0])}. Нажмите, чтобы подобрать замену.`;
+    if (state.status === 'error') return `${state.teacher.label}: расписание не загружено.`;
+    return `${state.teacher.label}: ${candidateStatusText({ person: state.teacher, status: state.status, windowPairs: state.windowPairs })}. Нажмите, чтобы выбрать, кого заменить на эту пару.`;
+  }
+
+  function slotTargetKey(target: SelectedLesson) {
+    const lessonId = String(target.lesson.rawEvent.lessonOid ?? `${target.lesson.discipline}:${target.lesson.group ?? ''}:${target.lesson.subgroup ?? ''}`);
+    return `${target.teacher.id}:${lessonId}`;
   }
 
   function selectReplacement(candidate: Candidate) {
@@ -382,6 +420,26 @@
     pickedReplacement = null;
   }
 
+  function confirmSlotReplacement() {
+    if (!slotReplacementPick?.target) return;
+    const selection = slotReplacementPick.target;
+    const replacement = slotReplacementPick.replacement;
+    const lessonId = String(selection.lesson.rawEvent.lessonOid ?? `${selection.lesson.discipline}:${selection.lesson.group ?? ''}:${selection.lesson.subgroup ?? ''}`);
+    const key = `${selection.teacher.id}:${selection.date}:${selection.slot.number}:${lessonId}`;
+    const entry: ConfirmedReplacement = {
+      key,
+      originalTeacher: selection.teacher,
+      replacement,
+      date: selection.date,
+      slot: selection.slot,
+      lesson: selection.lesson
+    };
+    if (persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry])) {
+      boardNotice = `Замена подтверждена: ${selection.teacher.label} → ${replacement.label}, ${formatDate(selection.date)}.`;
+    }
+    slotReplacementPick = null;
+  }
+
   function removeConfirmedReplacement(key: string) {
     persistConfirmedReplacements(confirmedReplacements.filter((item) => item.key !== key));
   }
@@ -399,8 +457,10 @@
 </script>
 
 <PlannerPageFrame section="ПЛАНИРОВАНИЕ" sectionNumber="03" breadcrumb="Замены" title="Замены занятий" description="Найдите занятие на кафедре и подберите свободного коллегу для замены" icon="⇄" on:home>
-  <button slot="headingAction" class="confirmed-replacements-trigger" type="button" on:click={() => showConfirmedReplacements = true}>
-    <span aria-hidden="true">✓</span> Подтверждённые замены <b>{confirmedReplacements.length}</b>
+  <button class="selection-bar confirmed-replacements-trigger" type="button" aria-label={`Открыть выбранные замены: ${confirmedReplacements.length}`} on:click={() => showConfirmedReplacements = true}>
+    <span class="selection-count" aria-hidden="true">{confirmedReplacements.length}</span>
+    <span><strong>Выбранные замены</strong><small>Посмотреть список</small></span>
+    <span class="confirmed-replacements-open" aria-hidden="true">↗</span>
   </button>
   <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания замен">
     <div class="sub-filter department-filter"><span class="sub-filter-label">Кафедра</span><span class="department-value">ПМФИ</span></div>
@@ -411,16 +471,17 @@
 
   <PlannerToolbar slot="toolbar" ariaLabel="Обозначения и настройки расписания">
     <div slot="legend" class="planner-toolbar-legend substitution-legend">
-      <span><i class="sub-legend-dot free"></i>Свободен, без окон</span>
-      <span><i class="sub-legend-dot window"></i>Свободен, окно</span>
-      <span><i class="sub-legend-dot no-lessons"></i>Нет пар сегодня</span>
-      <span><i class="sub-legend-dot busy"></i>Занятие · нажмите для замены</span>
+      <span><i class="sub-legend-dot free"></i>Свободен без окон</span>
+      <span><i class="sub-legend-dot window"></i>Свободен, есть окна</span>
+      <span><i class="sub-legend-dot no-lessons"></i>Нет занятий сегодня</span>
+      <span><i class="sub-legend-dot busy"></i>Занятие</span>
+      <p class="substitution-help"><strong>Как подобрать:</strong> нажмите занятие, чтобы выбрать заменяющего. Нажмите строку без занятия, чтобы назначить преподавателя на эту пару и выбрать, кого заменить.</p>
     </div>
     <div slot="options" class="planner-toolbar-options sub-display-options" aria-label="Настройки отображения расписания">
       <div class="sub-status-options" aria-label="Фильтры занятости">
-        <label class="sub-display-option" class:active={activeOnly}><input type="checkbox" bind:checked={activeOnly} /> Только преподаватели с занятиями</label>
-        <label class="sub-display-option" class:active={showFreeTeachers}><input type="checkbox" bind:checked={showFreeTeachers} /> Отображать свободных</label>
-        <label class="sub-display-option" class:active={showWindowTeachers}><input type="checkbox" bind:checked={showWindowTeachers} /> Отображать свободных с окнами</label>
+        <label class="sub-display-option" class:active={activeOnly} title="Скрывает преподавателей без занятий в течение дня"><input type="checkbox" bind:checked={activeOnly} /> Скрывать преподавателей без занятий сегодня</label>
+        <label class="sub-display-option" class:active={showFreeTeachers} title="Показывает преподавателей, свободных в выбранную пару и без окон в течение дня"><input type="checkbox" bind:checked={showFreeTeachers} /> Показывать свободных без окон</label>
+        <label class="sub-display-option" class:active={showWindowTeachers} title="Показывает преподавателей, свободных в выбранную пару, но с окнами в течение дня"><input type="checkbox" bind:checked={showWindowTeachers} /> Показывать свободных с окнами</label>
       </div>
       <div class="sub-detail-options" aria-label="Отображаемые сведения">
         <label class="sub-display-option" class:active={showSubjects}><input type="checkbox" bind:checked={showSubjects} /> Отображать предметы</label>
@@ -440,7 +501,7 @@
   {:else if hasLoaded}
     {#each weeks as week (week.monday)}
       <section class="week-block sub-week">
-        <div class="week-title"><div><span>НЕДЕЛЯ</span><h3>{formatDate(week.monday)} — {formatDate(week.saturday)}</h3></div><span>ПН — СБ · {teachers.length} ПРЕПОДАВАТЕЛЕЙ</span></div>
+        <div class="week-title"><div><span>НЕДЕЛЯ</span><h3>{formatDate(week.monday)} — {formatDate(week.saturday)}</h3></div><span>ПН — СБ · {teachers.length} НА КАФЕДРЕ</span></div>
         <div class="table-scroll">
           <div class="schedule-table viewer-schedule-table sub-schedule-table" role="table" aria-label={`Неделя ${formatDate(week.monday)} — ${formatDate(week.saturday)}`}>
             <div class="table-row table-head" role="row">
@@ -463,7 +524,7 @@
                         {#each visibleLanes as lane (lane.entity.id)}
                           {@const state = teacherSlot(cell.date, row.slot.number, lane.entity.id)}
                           {#if state}
-                            <div class="viewer-entity-line sub-teacher-line" class:details-lines={showSubjects || showGroups || showAuditoriums} role="button" aria-disabled={state.status !== 'busy'} tabindex={state.status === 'busy' ? 0 : -1} aria-label={`${state.teacher.label}${state.lessons[0] ? `: ${lessonTitle(state.lessons[0])}` : ''}`} class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'} on:mouseenter={(event) => state.lessons[0] && showLessonTooltip(event, state.lessons[0], state.teacher, cell.date, row.slot)} on:mouseleave={() => activeLessonTooltip = null} on:click={(event) => state.status === 'busy' && openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons)} on:keydown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget && state.status === 'busy') { event.preventDefault(); openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons); } }}>
+                            <div class="viewer-entity-line sub-teacher-line" class:details-lines={showSubjects || showGroups || showAuditoriums} role="button" aria-disabled={state.status === 'error'} tabindex={state.status === 'error' ? -1 : 0} aria-label={teacherActionLabel(state)} title={state.status === 'error' ? 'Расписание не загружено' : 'Нажмите, чтобы подобрать замену'} class:line-busy={state.status === 'busy'} class:sub-free={state.status === 'free'} class:sub-window={state.status === 'window'} class:sub-no-lessons={state.status === 'no-lessons'} class:sub-error={state.status === 'error'} on:mouseenter={(event) => state.lessons[0] && showLessonTooltip(event, state.lessons[0], state.teacher, cell.date, row.slot)} on:mouseleave={() => activeLessonTooltip = null} on:click={(event) => state.status === 'busy' ? openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons) : (state.status === 'free' || state.status === 'window' || state.status === 'no-lessons') && openSlotReplacementPick(state.teacher, cell.date, row.slot)} on:keydown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget && state.status !== 'error') { event.preventDefault(); state.status === 'busy' ? openClickedLesson(event, state.teacher, cell.date, row.slot, state.lessons) : openSlotReplacementPick(state.teacher, cell.date, row.slot); } }}>
                               <span class="viewer-line-entity" title={lane.entity.label}>{formatShortName(lane.entity.label)}:</span>
                               {#if state.status === 'busy'}
                                 {#if showSubjects || showGroups || showAuditoriums}<div class="viewer-line-lessons">
@@ -472,7 +533,7 @@
                                   {#if showAuditoriums}<div class="sub-metadata-line sub-auditoriums">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.auditorium}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={`ауд. ${lesson.auditorium}`}>ауд. {lesson.auditorium}</span>{/if}{/each}</div>{/if}
                                 </div>{/if}
                               {:else}
-                                <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? `Окно (${formatPairCount(state.windowPairs)})` : state.status === 'error' ? 'Нет данных' : 'Нет пар сегодня'}</span>
+                                <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? `Окно (${formatPairCount(state.windowPairs)})` : state.status === 'error' ? 'Нет данных' : 'Нет занятий сегодня'}</span>
                               {/if}
                             </div>
                           {/if}
@@ -489,6 +550,29 @@
     {/each}
   {/if}
 </PlannerPageFrame>
+
+{#if slotReplacementPick}
+  <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) slotReplacementPick = null; }} on:keydown={(event) => event.key === 'Escape' && (slotReplacementPick = null)}>
+    <div class="sub-modal slot-replacement-modal" role="dialog" aria-modal="true" aria-labelledby="slot-replacement-title">
+      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => slotReplacementPick = null}>×</button>
+      <span class="section-kicker">ПОДБОР ЗАМЕНЫ</span>
+      <h2 id="slot-replacement-title">Кого заменить этой парой?</h2>
+      <p class="sub-modal-context"><strong>Заменяющий: {slotReplacementPick.replacement.label}</strong><br />Дата и пара уже заданы выбранной клеткой. Выберите преподавателя и занятие.</p>
+      <div class="sub-candidate-list slot-replacement-target-list">
+        {#each slotReplacementTargets(slotReplacementPick) as target (target.teacher.id + ':' + String(target.lesson.rawEvent.lessonOid ?? target.lesson.discipline + ':' + (target.lesson.group ?? '') + ':' + (target.lesson.subgroup ?? '')))}
+          {@const targetKey = `${target.teacher.id}:${String(target.lesson.rawEvent.lessonOid ?? target.lesson.discipline + ':' + (target.lesson.group ?? '') + ':' + (target.lesson.subgroup ?? ''))}`}
+          <button type="button" class="sub-candidate slot-replacement-target" class:is-picked={slotReplacementPick.target && slotTargetKey(slotReplacementPick.target) === targetKey} aria-pressed={Boolean(slotReplacementPick.target && slotTargetKey(slotReplacementPick.target) === targetKey)} on:click={() => slotReplacementPick && (slotReplacementPick = { ...slotReplacementPick, target })}>
+            <span><strong>{target.teacher.label}</strong><small>{target.lesson.discipline}{#if target.lesson.kindOfWork} · {target.lesson.kindOfWork}{/if}{#if target.lesson.group} · {target.lesson.group}{#if target.lesson.subgroup} / подгр. {target.lesson.subgroup}{/if}{/if}{#if target.lesson.auditorium} · ауд. {target.lesson.auditorium}{/if}</small></span>
+            <b>{slotReplacementPick.target && slotTargetKey(slotReplacementPick.target) === targetKey ? 'Выбрано' : 'Выбрать'}</b>
+          </button>
+        {:else}<div class="confirmed-replacements-empty"><strong>На эту пару нет занятий для замены</strong><p>Выберите свободного преподавателя в другом слоте расписания.</p></div>{/each}
+      </div>
+      {#if slotReplacementPick.target}
+        <div class="slot-replacement-confirm"><div><span>Будет заменять · {formatDate(slotReplacementPick.date)}, {slotReplacementPick.slot.number}-я пара · {slotReplacementPick.slot.start}–{slotReplacementPick.slot.end}</span><strong>{slotReplacementPick.target.teacher.label} → {slotReplacementPick.replacement.label}</strong><small>{slotReplacementPick.target.lesson.discipline}{#if slotReplacementPick.target.lesson.group} · {slotReplacementPick.target.lesson.group}{#if slotReplacementPick.target.lesson.subgroup} / подгр. {slotReplacementPick.target.lesson.subgroup}{/if}{/if}</small></div><button type="button" class="primary-button" on:click={confirmSlotReplacement}>Подтвердить замену</button></div>
+      {/if}
+    </div>
+  </div>
+{/if}
 
 {#if selectedLesson}
   <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) selectedLesson = null; }} on:keydown={(event) => event.key === 'Escape' && (selectedLesson = null)}>
@@ -535,7 +619,7 @@
       {#if notice}<p class="sub-notice" role="status">{notice}</p>{/if}
       <p class="sub-modal-footnote">Зелёный — свободен без окон · жёлтый — свободен в окно · красный — сегодня нет пар. Выбор помогает согласовать замену и не меняет исходное расписание.</p>
       <div class="sub-confirm-bar">
-        <div>{#if pickedReplacement}<span>Замена для</span><strong>{selectedLesson.teacher.label} → {pickedReplacement.label}</strong>{:else}<span>Сначала выберите свободного преподавателя</span>{/if}</div>
+        <div>{#if pickedReplacement}<span>Замена · {formatDate(selectedLesson.date)}, {selectedLesson.slot.number}-я пара · {selectedLesson.slot.start}–{selectedLesson.slot.end}</span><strong>{selectedLesson.teacher.label} → {pickedReplacement.label}</strong><small>{selectedLesson.lesson.discipline}{#if selectedLesson.lesson.group} · {selectedLesson.lesson.group}{#if selectedLesson.lesson.subgroup} / подгр. {selectedLesson.lesson.subgroup}{/if}{/if}</small>{:else}<span>Сначала выберите свободного преподавателя</span>{/if}</div>
         <button type="button" class="primary-button" disabled={!pickedReplacement} on:click={saveConfirmedReplacement}>Подтвердить замену</button>
       </div>
     </div>
@@ -547,8 +631,8 @@
     <div class="sub-modal confirmed-replacements-modal" role="dialog" aria-modal="true" aria-labelledby="confirmed-replacements-title">
       <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => showConfirmedReplacements = false}>×</button>
       <span class="section-kicker">ЗАМЕНЫ · СПИСОК</span>
-      <h2 id="confirmed-replacements-title">Подтверждённые замены</h2>
-      <p class="sub-modal-context">Список сохраняется в этом браузере и доступен при следующем открытии раздела.</p>
+      <h2 id="confirmed-replacements-title">Выбранные замены</h2>
+      <p class="sub-modal-context">Это ваш список в текущем браузере. Он помогает отслеживать выбор и не меняет общее расписание.</p>
       {#if confirmedReplacements.length}
         <div class="confirmed-replacements-list">
           {#each [...confirmedReplacements].sort((a, b) => a.date.localeCompare(b.date) || a.slot.number - b.slot.number) as item (item.key)}
@@ -560,7 +644,7 @@
           {/each}
         </div>
       {:else}
-        <div class="confirmed-replacements-empty"><span aria-hidden="true">↗</span><strong>Пока нет подтверждённых замен</strong><p>Выберите занятие в таблице, затем отметьте преподавателя и подтвердите замену.</p></div>
+        <div class="confirmed-replacements-empty"><span aria-hidden="true">↗</span><strong>Пока нет выбранных замен</strong><p>Выберите занятие в таблице, затем отметьте преподавателя и подтвердите замену.</p></div>
       {/if}
       {#if confirmedReplacements.length}<button type="button" class="confirmed-replacements-clear" on:click={() => persistConfirmedReplacements([])}>Очистить список</button>{/if}
     </div>
@@ -587,15 +671,17 @@
 {/if}
 
 <style>
-  .substitution-workspace{max-width:1600px}
+  :global(.workspace.substitution-workspace){max-width:1600px;padding-bottom:155px}
   .substitution-legend{gap:9px 20px;padding:0 2px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;flex:1 1 100%;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-left:0}.sub-status-options{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:7px}.sub-detail-options{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
   .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
   .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
-  .confirmed-replacements-trigger{display:inline-flex;align-items:center;gap:8px;border:1px solid #d6e8da;border-radius:8px;background:#eef6ef;color:#2d6d54;padding:8px 11px;font-size:10px;font-weight:800}.confirmed-replacements-trigger>span{font-size:14px}.confirmed-replacements-trigger b{display:grid;place-items:center;min-width:19px;height:19px;border-radius:20px;background:#d6edda;color:#2b684b;padding:0 5px;font-size:9px}
+  .confirmed-replacements-trigger{position:fixed;right:30px;bottom:24px;z-index:1050;display:flex;align-items:center;gap:11px;border:1px solid #2d6b4f;border-radius:12px;background:#193c31;color:#fff;padding:10px 14px;box-shadow:0 14px 35px rgba(18,58,40,.28);text-align:left;transition:transform .15s,background .15s}.confirmed-replacements-trigger:hover{background:#245744;transform:translateY(-2px)}.confirmed-replacements-trigger .selection-count{flex:none}.confirmed-replacements-trigger>span:nth-child(2){display:flex;flex-direction:column;gap:2px;min-width:120px}.confirmed-replacements-trigger strong{font-size:11px}.confirmed-replacements-trigger small{font-size:9px;color:#b4d5bd}.confirmed-replacements-open{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:#335a49;color:#d8efdc;font-size:16px}
   .sub-board-notice{margin:0 0 12px;padding:9px 12px;border:1px solid #cfe6d3;border-radius:7px;background:#eef7f0;color:#28623c;font-size:11px}
   .sub-confirm-bar{position:sticky;bottom:-26px;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.sub-confirm-bar>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.sub-confirm-bar strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.sub-confirm-bar .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}.sub-confirm-bar .primary-button:disabled{opacity:.7}
   .confirmed-replacements-modal{max-width:720px}.confirmed-replacements-list{display:flex;flex-direction:column;gap:8px;max-height:min(54vh,500px);overflow:auto}.confirmed-replacement-card{display:grid;grid-template-columns:minmax(125px,.75fr) minmax(0,2fr) 28px;align-items:center;gap:12px;padding:12px;border:1px solid #dfe9e1;border-radius:9px;background:#fbfdfb}.confirmed-replacement-date,.confirmed-replacement-detail{display:flex;flex-direction:column;gap:4px;min-width:0}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{color:#315946;font-size:10px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{color:#7d8e83;font-size:9px;line-height:1.4}.confirmed-replacement-detail strong{overflow-wrap:anywhere}.confirmed-replacement-detail i{color:#81ad92;font-style:normal;padding:0 3px}.confirmed-replacement-card>button{width:27px;height:27px;border:0;border-radius:6px;background:#f5e9e7;color:#a45b55;font-size:18px}.confirmed-replacements-empty{display:grid;justify-items:center;gap:8px;padding:35px 20px;border:1px dashed #dce8de;border-radius:9px;background:#fbfdfb;text-align:center}.confirmed-replacements-empty>span{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#eaf4ed;color:#579374;font-size:20px}.confirmed-replacements-empty strong{color:#385e49;font-size:12px}.confirmed-replacements-empty p{max-width:340px;margin:0;color:#819187;font-size:10px;line-height:1.6}.confirmed-replacements-clear{display:block;margin:13px 0 0 auto;border:0;background:transparent;color:#a45b55;font-size:10px;font-weight:800}
+  .slot-replacement-modal{max-width:720px}.slot-replacement-modal .sub-modal-context strong{color:#315946}.slot-replacement-target{min-height:57px}.slot-replacement-target small{font-size:9px;line-height:1.45}.slot-replacement-target b{flex:none;background:#eef6ef;color:#2d6d54;padding:7px 9px}.slot-replacement-target.is-picked{background:#f1f8f2}.slot-replacement-confirm{position:sticky;bottom:-26px;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.slot-replacement-confirm>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.slot-replacement-confirm strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.slot-replacement-confirm .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}
+  .substitution-help{flex:1 1 100%;width:100%;margin:2px 0 0;color:#6f8176;font-size:11px;font-weight:500;line-height:1.5}.substitution-help strong{color:#315946;font-weight:800}.sub-display-option{font-size:11px;padding:7px 10px}.sub-status-text{font-size:10px;line-height:1.35}.sub-metadata-line{font-size:10px}.sub-candidate strong{font-size:12px}.sub-candidate small{font-size:10px;line-height:1.4}.sub-candidate b{font-size:9px}.sub-modal-context{font-size:12px}.sub-modal-footnote{font-size:10px}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{font-size:11px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{font-size:10px}.confirmed-replacements-empty p{font-size:11px}.slot-replacement-target{min-height:60px}.slot-replacement-target small{font-size:10px}.slot-replacement-target b{font-size:10px}.slot-replacement-confirm>div{font-size:10px}.slot-replacement-confirm strong{font-size:11px}.slot-replacement-confirm small,.sub-confirm-bar small{color:#718579;font-size:10px;line-height:1.35}.sub-confirm-bar>div{font-size:10px}.sub-confirm-bar strong{font-size:11px}.sub-teacher-line[role="button"]:focus-visible{outline:3px solid #82bca5;outline-offset:1px;position:relative;z-index:1}.sub-teacher-line:not(.sub-error):hover{border-color:#80b59a;box-shadow:0 1px 4px rgba(36,95,80,.12);filter:none}
   @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column}.sub-detail-options{margin-left:0;justify-content:flex-start}}
-  @media(max-width:560px){.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}.sub-confirm-bar{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.sub-confirm-bar .primary-button{width:100%;justify-content:center}.confirmed-replacement-card{grid-template-columns:minmax(0,1fr) 28px}.confirmed-replacement-date{grid-column:1}.confirmed-replacement-detail{grid-column:1;grid-row:2}.confirmed-replacement-card>button{grid-column:2;grid-row:1 / span 2}}
+  @media(max-width:560px){:global(.workspace.substitution-workspace){padding-bottom:125px}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}.sub-confirm-bar{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.sub-confirm-bar .primary-button{width:100%;justify-content:center}.confirmed-replacement-card{grid-template-columns:minmax(0,1fr) 28px}.confirmed-replacement-date{grid-column:1}.confirmed-replacement-detail{grid-column:1;grid-row:2}.confirmed-replacement-card>button{grid-column:2;grid-row:1 / span 2}.confirmed-replacements-trigger{right:14px;bottom:max(14px,env(safe-area-inset-bottom));padding:8px 10px;gap:8px}.confirmed-replacements-trigger>span:nth-child(2){min-width:0}.confirmed-replacements-trigger .selection-count{width:32px;height:32px;font-size:17px}.slot-replacement-confirm{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.slot-replacement-confirm .primary-button{width:100%;justify-content:center}}
 </style>

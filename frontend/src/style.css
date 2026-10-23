@@ -1814,12 +1814,28 @@ select:focus,
 }
 
 .viewer-top-controls .viewer-stream-list {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: start;
   max-height: 108px;
   margin-top: 5px;
   padding: 2px 0;
   gap: 0 12px;
   border-top: 1px solid #edf0eb;
+}
+
+.viewer-stream-cohort {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.viewer-stream-cohort h3 {
+  margin: 0;
+  padding: 5px 2px 7px;
+  border-bottom: 1px solid #e7ede7;
+  color: #34745d;
+  font-size: 10px;
+  font-weight: 800;
 }
 
 .viewer-top-controls .viewer-stream-list label {
