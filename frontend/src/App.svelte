@@ -279,7 +279,7 @@
   }
 
   type ActiveViewerTooltip = {
-    lesson: ViewerLessonDetail;
+    lesson: ViewerLessonDetail | null;
     entity: ScheduleViewerEntity;
     slot: Slot;
     date: string;
@@ -293,6 +293,12 @@
     if (!target) return;
     const targetRect = target.getBoundingClientRect();
     activeViewerTooltip = { lesson, entity, slot, date, targetRect };
+  }
+
+  function showViewerStatusTooltip(entity: ScheduleViewerEntity, slot: Slot, date: string, event: MouseEvent | FocusEvent) {
+    const target = event.currentTarget as HTMLElement | null;
+    if (!target) return;
+    activeViewerTooltip = { lesson: null, entity, slot, date, targetRect: target.getBoundingClientRect() };
   }
 
   function hideViewerTooltip() {
@@ -1463,6 +1469,8 @@
                                       class="viewer-entity-line"
                                       class:line-free={lane.isFree}
                                       class:line-busy={!lane.isFree}
+                                      on:mouseenter={(event) => lane.lessons.length === 0 && showViewerStatusTooltip(lane.entity, row.slot, cell.date, event)}
+                                      on:mouseleave={hideViewerTooltip}
                                     >
                                       {#if viewerDisplayEntities.length > 1}
                                         <span class="viewer-line-entity" title={lane.entity.label}>
@@ -1787,40 +1795,47 @@
       <div class="tooltip-body">
         <div class="tooltip-section">
           <div class="tooltip-entity-card card-free">
-            <div class="entity-head">
-              <strong class="entity-title">{lesson.discipline}</strong>
-              {#if lesson.kindOfWork}
-                <span class="entity-badge">{lesson.kindOfWork}</span>
-              {/if}
-            </div>
-            <div class="entity-desc">
-              <div class="tooltip-meta-stack">
-                {#if lesson.lecturer}
-                  <div class="tooltip-meta-line">
-                    <span class="party-label">Преподаватель:</span>
-                    <strong>{lesson.lecturer}</strong>
-                  </div>
-                {/if}
-                {#if lesson.group}
-                  <div class="tooltip-meta-line">
-                    <span class="party-label">Группа:</span>
-                    <strong>{lesson.group}{#if lesson.subgroup} (подгр. {lesson.subgroup}){/if}</strong>
-                  </div>
-                {/if}
-                {#if lesson.auditorium}
-                  <div class="tooltip-meta-line">
-                    <span class="party-label">Аудитория:</span>
-                    <strong>ауд. {lesson.auditorium}{#if lesson.building} ({lesson.building}){/if}</strong>
-                  </div>
-                {/if}
-                {#if lesson.timeStart && lesson.timeEnd}
-                  <div class="tooltip-meta-line">
-                    <span class="party-label">Время:</span>
-                    <span>{lesson.timeStart}–{lesson.timeEnd}</span>
-                  </div>
+            {#if lesson}
+              <div class="entity-head">
+                <strong class="entity-title">{lesson.discipline}</strong>
+                {#if lesson.kindOfWork}
+                  <span class="entity-badge">{lesson.kindOfWork}</span>
                 {/if}
               </div>
-            </div>
+              <div class="entity-desc">
+                <div class="tooltip-meta-stack">
+                  {#if lesson.lecturer}
+                    <div class="tooltip-meta-line">
+                      <span class="party-label">Преподаватель:</span>
+                      <strong>{lesson.lecturer}</strong>
+                    </div>
+                  {/if}
+                  {#if lesson.group}
+                    <div class="tooltip-meta-line">
+                      <span class="party-label">Группа:</span>
+                      <strong>{lesson.group}{#if lesson.subgroup} (подгр. {lesson.subgroup}){/if}</strong>
+                    </div>
+                  {/if}
+                  {#if lesson.auditorium}
+                    <div class="tooltip-meta-line">
+                      <span class="party-label">Аудитория:</span>
+                      <strong>ауд. {lesson.auditorium}{#if lesson.building} ({lesson.building}){/if}</strong>
+                    </div>
+                  {/if}
+                  {#if lesson.timeStart && lesson.timeEnd}
+                    <div class="tooltip-meta-line">
+                      <span class="party-label">Время:</span>
+                      <span>{lesson.timeStart}–{lesson.timeEnd}</span>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {:else}
+              <div class="entity-head">
+                <strong class="entity-title">Нет занятия на эту пару</strong>
+                <span class="entity-badge">Свободно</span>
+              </div>
+            {/if}
           </div>
         </div>
       </div>
