@@ -1978,6 +1978,18 @@ select:focus,
   grid-template-columns: 86px repeat(6, minmax(215px, 1fr));
 }
 
+.viewer-schedule-table .table-row:not(.table-head) {
+  border-top: 2px solid #cbd7ce;
+}
+
+.viewer-schedule-table .table-row > div + div {
+  border-left: 2px solid #cbd7ce;
+}
+
+.viewer-schedule-table .table-head > div {
+  border-left-color: #cbd7ce;
+}
+
 .viewer-cell-wrap {
   min-height: 48px;
   height: auto;
