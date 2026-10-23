@@ -60,6 +60,10 @@
 .viewer-stream-picker .commission-choice{margin-bottom:8px}
 .viewer-add-group{margin:0 0 8px}
 .viewer-add-group .search-input-wrap input{height:38px}
+.viewer-top-controls .viewer-stream-picker{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.9fr);column-gap:12px;align-items:end}
+.viewer-top-controls .viewer-stream-picker>.field-head,.viewer-top-controls .viewer-stream-picker>.viewer-stream-actions,.viewer-top-controls .viewer-stream-picker>.viewer-stream-list,.viewer-top-controls .viewer-stream-picker>.viewer-catalog-loading,.viewer-top-controls .viewer-stream-picker>.form-error,.viewer-top-controls .viewer-stream-picker>.viewer-stream-retry{grid-column:1/-1}
+.viewer-top-controls .viewer-stream-picker .viewer-stream-controls{grid-column:1}
+.viewer-top-controls .viewer-stream-picker .viewer-add-group{grid-column:2;margin:0}
 .viewer-stream-picker .field-hint,.viewer-stream-picker .form-error{margin:6px 0 0;line-height:1.5}
 .viewer-stream-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0;color:#83958a;font-size:9px;font-weight:700}
 .viewer-stream-actions>span:last-child{display:flex;gap:8px}
@@ -1923,6 +1927,19 @@ select:focus,
 
   .viewer-top-controls .viewer-stream-controls {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .viewer-top-controls .viewer-stream-picker {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .viewer-top-controls .viewer-stream-picker .viewer-stream-controls,
+  .viewer-top-controls .viewer-stream-picker .viewer-add-group {
+    grid-column: 1;
+  }
+
+  .viewer-top-controls .viewer-stream-picker .viewer-add-group {
+    margin-top: 8px;
   }
 
   .viewer-top-controls .viewer-stream-list {
