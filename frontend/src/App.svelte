@@ -235,6 +235,21 @@
     if (viewerHasGenerated) void generateScheduleView();
   }
 
+  function setViewerYearSelection(groups: ScheduleViewerEntity[], checked: boolean) {
+    const next = new Set(viewerSelectedGroupIds);
+    for (const group of groups) {
+      if (checked) next.add(group.id);
+      else next.delete(group.id);
+    }
+    viewerSelectedGroupIds = next;
+    if (viewerHasGenerated) void generateScheduleView();
+  }
+
+  function setIndeterminate(node: HTMLInputElement, indeterminate: boolean) {
+    node.indeterminate = indeterminate;
+    return { update(value: boolean) { node.indeterminate = value; } };
+  }
+
   function selectAllViewerGroups(checked: boolean) {
     viewerSelectedGroupIds = new Set(checked ? viewerDepartmentGroups.map((group) => group.id) : []);
     if (viewerHasGenerated) void generateScheduleView();
@@ -1306,8 +1321,14 @@
                 <div class="viewer-stream-actions"><span>Выбрано {viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id)).length} из {viewerDepartmentGroups.length}</span><span><button type="button" on:click={() => selectAllViewerGroups(true)}>Выбрать все</button><button type="button" on:click={() => selectAllViewerGroups(false)}>Снять выбор</button></span></div>
                 <div class="viewer-stream-list" aria-label="Группы кафедры ПМФИ">
                   {#each viewerGroupColumns as column (column.year)}
+                    {@const selectedInYear = column.groups.filter((group) => viewerSelectedGroupIds.has(group.id)).length}
                     <div class="viewer-stream-cohort">
-                      <h3>{column.year === 'Другие' ? column.year : `${column.year} год`}</h3>
+                      <h3>
+                        <label class="viewer-stream-cohort-select">
+                          <input type="checkbox" checked={selectedInYear === column.groups.length} use:setIndeterminate={selectedInYear > 0 && selectedInYear < column.groups.length} aria-checked={selectedInYear > 0 && selectedInYear < column.groups.length ? 'mixed' : selectedInYear === column.groups.length} aria-label={`Выбрать все группы ${column.year === 'Другие' ? 'без года' : `${column.year} года`}`} on:change={(event) => setViewerYearSelection(column.groups, (event.currentTarget as HTMLInputElement).checked)} />
+                          <span>{column.year === 'Другие' ? column.year : `${column.year} год`}</span>
+                        </label>
+                      </h3>
                       {#each column.groups as group (group.id)}
                         <label><input type="checkbox" checked={viewerSelectedGroupIds.has(group.id)} on:change={() => toggleViewerGroup(group.id)} /><span>{group.label}</span></label>
                       {/each}
