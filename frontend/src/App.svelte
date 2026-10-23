@@ -1611,7 +1611,7 @@
               <span class="party-label">Преподаватели ({cell.teachersDetails.length}):</span>
               <div class="tooltip-items-list">
                 {#each cell.teachersDetails as t}
-                  <div class="tooltip-entity-card" class:card-free={t.available && !t.hasWindow && !t.noLessons} class:card-teacher-window={t.available && t.hasWindow && !t.noLessons} class:card-no-lessons={t.noLessons} class:card-busy={!t.available && !t.noLessons}>
+                  <div class="tooltip-entity-card" class:card-free={t.available && !t.hasWindow && !t.noLessons} class:card-teacher-window={t.available && t.hasWindow && !t.noLessons} class:card-no-lessons={t.noLessons || (t.available && !t.hasWindow)} class:card-busy={!t.available && !t.noLessons}>
                     <div class="entity-head">
                       <strong class="entity-title">{t.person.label}</strong>
                       <span class="entity-badge">{t.noLessons ? 'нет пар' : !t.available ? 'занят' : t.hasWindow ? `Окно (${formatPairCount(t.windowPairs)})` : 'без окон'}</span>
