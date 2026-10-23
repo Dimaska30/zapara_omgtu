@@ -188,8 +188,24 @@ select:focus,
   color: #697c72;
   border: 1px solid #dbe2dd;
 }
+.mini-chip.chip-group-no-lessons{
+  flex-wrap: wrap;
+  gap: 0 4px;
+  background: #f4f7f4;
+  color: #526b5e;
+  border: 1px dashed #9aafa2;
+}
+.mini-chip-state{
+  flex-basis: 100%;
+  color: #71877a;
+  font-size: 7.5px;
+  font-weight: 700;
+  line-height: 1.25;
+  white-space: normal;
+}
 .is-selected .mini-chip.chip-free,
 .is-selected .mini-chip.chip-group-window,
+.is-selected .mini-chip.chip-group-no-lessons,
 .is-selected .mini-chip.chip-teacher-window,
 .is-selected .mini-chip.chip-window,
 .is-selected .mini-chip.chip-busy{
@@ -197,6 +213,7 @@ select:focus,
   color: #ffffff;
   border-color: rgba(255, 255, 255, 0.4);
 }
+.is-selected .mini-chip-state{color:#edf4ef}
 
 .custom-tooltip{
   position: fixed;

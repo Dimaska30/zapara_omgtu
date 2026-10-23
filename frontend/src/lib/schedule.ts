@@ -52,6 +52,7 @@ export type LessonDetail = {
 export type GroupSlotDetail = {
   group: Group;
   busy: boolean;
+  noLessonsToday: boolean;
   hasWindow: boolean;
   windowPairs: number;
   lessons: string[];
@@ -725,7 +726,7 @@ export function buildWeeks(
             const groupSlotLessons = slotEvents(dailyEvents, slot);
             const groupLessonDetails = groupSlotLessons.map(extractLessonDetail);
             const lessons = [...new Set(groupLessonDetails.map((l) => l.label))];
-            return { group, busy, hasWindow, windowPairs, lessons, lessonDetails: groupLessonDetails };
+            return { group, busy, noLessonsToday: dailyEvents.length === 0, hasWindow, windowPairs, lessons, lessonDetails: groupLessonDetails };
           });
           const freeGroups = outOfRange ? [] : groupStatus.filter((g) => !g.busy).map((g) => g.group);
           const busyGroups = outOfRange ? [] : groupStatus.filter((g) => g.busy).map((g) => g.group);

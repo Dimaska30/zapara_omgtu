@@ -152,6 +152,7 @@
   let viewerLoadedEntities: ScheduleViewerEntity[] = [];
   let viewerEventsByEntity = new Map<string, ApiItem[]>();
   let viewerScheduleFailedIds = new Set<string>();
+  let viewerScheduleCacheRange = '';
   let viewerGroupCatalogLoading = false;
   let viewerGroupCatalogError = '';
   let viewerGroupCatalogKey = '';
@@ -245,7 +246,7 @@
     const next = new Set(viewerSelectedGroupIds);
     if (next.has(id)) next.delete(id); else next.add(id);
     viewerSelectedGroupIds = next;
-    if (viewerHasGenerated) void generateScheduleView();
+    applyViewerGroupSelection();
   }
 
   function setViewerYearSelection(groups: ScheduleViewerEntity[], checked: boolean) {
@@ -255,7 +256,7 @@
       else next.delete(group.id);
     }
     viewerSelectedGroupIds = next;
-    if (viewerHasGenerated) void generateScheduleView();
+    applyViewerGroupSelection();
   }
 
   function setIndeterminate(node: HTMLInputElement, indeterminate: boolean) {
@@ -265,7 +266,20 @@
 
   function selectAllViewerGroups(checked: boolean) {
     viewerSelectedGroupIds = new Set(checked ? viewerSelectableGroups.map((group) => group.id) : []);
-    if (viewerHasGenerated) void generateScheduleView();
+    applyViewerGroupSelection();
+  }
+
+  function applyViewerGroupSelection() {
+    if (!viewerHasGenerated) return;
+    const entities = viewerScheduleEntities();
+    viewerLoadedEntities = entities;
+    applyViewerDisplayFilter();
+    const cacheKey = `${viewerStart}:${viewerFinish}`;
+    if (entities.some((entity) => !viewerEventsByEntity.has(`${entity.type}:${entity.id}`) || viewerScheduleFailedIds.has(`${entity.type}:${entity.id}`))) {
+      void generateScheduleView();
+    } else if (viewerScheduleCacheRange !== cacheKey) {
+      void generateScheduleView();
+    }
   }
 
   function applyViewerDisplayFilter() {
@@ -314,26 +328,39 @@
       viewerError = 'Выберите хотя бы одну группу МО или ФИТ.';
       return;
     }
-    viewerLoading = true;
+    const cacheKey = `${viewerStart}:${viewerFinish}`;
+    if (viewerScheduleCacheRange !== cacheKey) {
+      viewerEventsByEntity = new Map();
+      viewerScheduleFailedIds = new Set();
+      viewerScheduleCacheRange = cacheKey;
+    }
+    const missingEntities = entities.filter((entity) => {
+      const key = `${entity.type}:${entity.id}`;
+      return !viewerEventsByEntity.has(key) || viewerScheduleFailedIds.has(key);
+    });
+    viewerLoading = missingEntities.length > 0;
     viewerError = null;
     try {
-      const entityEventsMap = new Map<string, ApiItem[]>();
-      const failedIds = new Set<string>();
+      const entityEventsMap = new Map(viewerEventsByEntity);
+      const failedIds = new Set(viewerScheduleFailedIds);
       await Promise.all(
-        entities.map(async (entity) => {
+        missingEntities.map(async (entity) => {
+          const key = `${entity.type}:${entity.id}`;
           try {
             const events = await getSchedule(entity.type, entity.id, viewerStart, viewerFinish);
-            entityEventsMap.set(`${entity.type}:${entity.id}`, events);
+            entityEventsMap.set(key, events);
+            failedIds.delete(key);
           } catch (e) {
             console.error(`Failed to load schedule for ${entity.label}:`, e);
-            failedIds.add(`${entity.type}:${entity.id}`);
-            entityEventsMap.set(`${entity.type}:${entity.id}`, []);
+            failedIds.add(key);
+            entityEventsMap.set(key, []);
           }
         })
       );
       viewerLoadedEntities = entities;
       viewerEventsByEntity = entityEventsMap;
       viewerScheduleFailedIds = failedIds;
+      viewerScheduleCacheRange = cacheKey;
       applyViewerDisplayFilter();
       viewerHasGenerated = true;
     } catch (e: any) {
@@ -1269,7 +1296,7 @@
                     {#each week.rows as row, rowIndex}<div class="table-row" role="row"><div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                       {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:today-column={cell.date === currentDateIso} class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
                         {#if selected.has(cell.key) && slotAssignedAuditoriums.has(cell.key)}<span class="cell-assigned-aud-chip">Ауд. {slotAssignedAuditoriums.get(cell.key)?.name}</span>{/if}
-                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={`${t.person.label}${t.hasWindow ? `: Окно (${formatPairCount(t.windowPairs)})` : ''}`}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow} class:chip-group-window={!detail.busy && detail.hasWindow} class:chip-busy={detail.busy} title={`${detail.group.label}${detail.hasWindow ? `: Окно (${formatPairCount(detail.windowPairs)})` : ''}`}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
+                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={`${t.person.label}${t.hasWindow ? `: Окно (${formatPairCount(t.windowPairs)})` : ''}`}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow && !detail.noLessonsToday} class:chip-group-window={!detail.busy && detail.hasWindow && !detail.noLessonsToday} class:chip-group-no-lessons={detail.noLessonsToday} class:chip-busy={detail.busy} title={`${detail.group.label}: ${detail.noLessonsToday ? 'нет пар сегодня' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : detail.busy ? 'занята' : 'без окон'}`}><span class="mini-chip-label">{detail.group.label}</span>{#if detail.noLessonsToday}<span class="mini-chip-state">нет пар сегодня</span>{/if}</span>{/each}</div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
                         {#if (uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{uiPage === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
                       </button>
                       {#if (uiPage === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
@@ -1691,10 +1718,10 @@
               <span class="party-label">Учебные группы ({cell.groupsDetails.length}):</span>
               <div class="tooltip-items-list">
                 {#each cell.groupsDetails as detail}
-                  <div class="tooltip-entity-card" class:card-free={!detail.busy && !detail.hasWindow} class:card-group-window={!detail.busy && detail.hasWindow} class:card-busy={detail.busy}>
+                  <div class="tooltip-entity-card" class:card-free={!detail.busy && !detail.hasWindow && !detail.noLessonsToday} class:card-group-window={!detail.busy && detail.hasWindow && !detail.noLessonsToday} class:card-no-lessons={detail.noLessonsToday} class:card-busy={detail.busy}>
                     <div class="entity-head">
                       <strong class="entity-title">{detail.group.label}</strong>
-                      <span class="entity-badge">{detail.busy ? 'занята' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : 'без окон'}</span>
+                      <span class="entity-badge">{detail.noLessonsToday ? 'нет пар сегодня' : detail.busy ? 'занята' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : 'без окон'}</span>
                     </div>
                     <div class="entity-desc">
                       {#if detail.busy}
@@ -1717,6 +1744,8 @@
                         {:else}
                           <span class="entity-lesson">Занятие</span>
                         {/if}
+                      {:else if detail.noLessonsToday}
+                        <span>Сегодня у группы нет пар</span>
                       {:else if detail.hasWindow}
                         <span>Свободна, окно: {formatPairCount(detail.windowPairs)}</span>
                       {:else}
