@@ -76,6 +76,7 @@ export type Cell = {
   date: string;
   available: boolean;
   teacherBusy: boolean;
+  teacherNoLessonsToday: boolean;
   teacherHasWindow: boolean;
   teacherWindowPairs: number;
   windowPairs: number;
@@ -707,6 +708,7 @@ export function buildWeeks(
           const selectedSlotsOnDate = SLOTS.filter((s) => selectedKeys?.has(`${date}-${s.number}`)).map((s) => s.number);
 
           const teacherDailyEvents = teacher.byDate.get(date) ?? [];
+          const teacherNoLessonsToday = teacherEvents.length > 0 && teacherDailyEvents.length === 0;
           const matchedLessons = outOfRange ? [] : slotEvents(teacherDailyEvents, slot);
           const teacherBusy = matchedLessons.length > 0;
           const lessonDetails = matchedLessons.map(extractLessonDetail);
@@ -833,7 +835,7 @@ export function buildWeeks(
           }
 
           const windowPairs = available ? Math.max(0, teacherHasWindow ? teacherWindowPairs : 0, ...groupStatus.filter((group) => !group.busy && group.hasWindow).map((group) => group.windowPairs), ...teachersDetails.filter((person) => person.available && person.hasWindow).map((person) => person.windowPairs)) : 0;
-          return { key: `${date}-${slot.number}`, date, available, teacherBusy, teacherHasWindow, teacherWindowPairs, windowPairs, freeGroups, busyGroups, groupsDetails: groupStatus, teachersDetails, freeGroupsWithWindow, lessons, lessonDetails, auditoriumsDetails, freeAuditoriums, busyAuditoriums, auditoriumBusy, outOfRange, commission, windowStatus, unavailableReason, unavailableText };
+          return { key: `${date}-${slot.number}`, date, available, teacherBusy, teacherNoLessonsToday, teacherHasWindow, teacherWindowPairs, windowPairs, freeGroups, busyGroups, groupsDetails: groupStatus, teachersDetails, freeGroupsWithWindow, lessons, lessonDetails, auditoriumsDetails, freeAuditoriums, busyAuditoriums, auditoriumBusy, outOfRange, commission, windowStatus, unavailableReason, unavailableText };
         })
       }))
     });
