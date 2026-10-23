@@ -1724,6 +1724,10 @@ select:focus,
   margin-bottom: 0;
 }
 
+.viewer-top-controls .viewer-stream-picker .viewer-add-group {
+  margin-top: 10px;
+}
+
 /* Expanded group selection gets its own full-width row; dates stay aligned below it. */
 .viewer-top-controls.has-group-selection {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(190px, .65fr);
