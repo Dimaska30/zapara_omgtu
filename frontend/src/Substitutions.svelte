@@ -30,7 +30,7 @@
   type BoardRow = { date: string; slot: Slot; teachers: TeacherSlot[] };
   type SelectedLesson = { teacher: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
   type SlotReplacementPick = { replacement: SearchItem; date: string; slot: Slot; target: SelectedLesson | null };
-  type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number };
+  type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number; lessons?: ViewerLessonDetail[] };
   type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
   type ConfirmedReplacement = { key: string; originalTeacher: SearchItem; replacement: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
   const CONFIRMED_REPLACEMENTS_KEY = 'zapara-confirmed-substitutions-v1';
@@ -52,6 +52,7 @@
   let showSubjects = false;
   let showGroups = false;
   let showAuditoriums = false;
+  let hideDepartmentMeetings = false;
   let activeLessonTooltip: HoverLesson | null = null;
   let teachers: SearchItem[] = [];
   let weeks: ViewerWeek[] = [];
@@ -91,6 +92,28 @@
 
   function normalizedDepartment() {
     return department.trim().toLocaleLowerCase('ru-RU') === 'пмфи' ? PFI_NAME : department.trim();
+  }
+
+  function isDepartmentMeeting(lesson: ViewerLessonDetail) {
+    const text = `${lesson.discipline} ${lesson.kindOfWork ?? ''}`.toLocaleLowerCase('ru-RU');
+    return text.includes('заседан') && text.includes('кафедр');
+  }
+
+  function visibleSubstitutionLanes(
+    cell: ViewerWeek['rows'][number]['cells'][number],
+    date: string,
+    slot: number,
+    hideMeetings: boolean,
+    filterActiveOnly: boolean,
+    includeFree: boolean,
+    includeWindows: boolean
+  ) {
+    return cell.lanes.filter((lane) => {
+      const state = teacherSlot(date, slot, lane.entity.id);
+      if (!state) return false;
+      if (filterActiveOnly && state.status !== 'busy' && state.status !== 'error' && !(includeFree && state.status === 'free') && !(includeWindows && state.status === 'window')) return false;
+      return !(hideMeetings && state.status === 'busy' && state.lessons.length > 0 && state.lessons.every(isDepartmentMeeting));
+    });
   }
 
   function makeRows(scheduleWeeks: ViewerWeek[], people: SearchItem[], failedIds: Set<string>): BoardRow[] {
@@ -267,23 +290,23 @@
     if (lesson) openReplacement(teacher, date, slot, lesson);
   }
 
-  function statusFor(events: Map<string, ApiItem[]>, person: SearchItem, date: string, slotNumber: number): { status: Status; windowPairs: number } {
-    if (!events.has(person.id)) return { status: 'error', windowPairs: 0 };
+  function statusFor(events: Map<string, ApiItem[]>, person: SearchItem, date: string, slotNumber: number): { status: Status; windowPairs: number; lessons: ViewerLessonDetail[] } {
+    if (!events.has(person.id)) return { status: 'error', windowPairs: 0, lessons: [] };
     const personWeeks = buildViewerWeeks(start, finish, [{ id: person.id, label: person.label, type: 'person' }], events);
     const busySlots: number[] = [];
-    let busy = false;
+    let busyLessons: ViewerLessonDetail[] = [];
     for (const week of personWeeks) {
       for (const row of week.rows) {
         const cell = row.cells.find((item) => item.date === date);
         const lane = cell?.lanes[0];
         if (lane?.lessons.length) busySlots.push(row.slot.number);
-        if (row.slot.number === slotNumber && lane?.lessons.length) busy = true;
+        if (row.slot.number === slotNumber && lane?.lessons.length) busyLessons = lane.lessons;
       }
     }
-    if (busy) return { status: 'busy', windowPairs: 0 };
-    if (!busySlots.length) return { status: 'no-lessons', windowPairs: 0 };
+    if (busyLessons.length) return { status: 'busy', windowPairs: 0, lessons: busyLessons };
+    if (!busySlots.length) return { status: 'no-lessons', windowPairs: 0, lessons: [] };
     const windowPairs = countWindowPairsIfOccupied(busySlots, slotNumber);
-    return { status: windowPairs ? 'window' : 'free', windowPairs };
+    return { status: windowPairs ? 'window' : 'free', windowPairs, lessons: [] };
   }
 
   $: selectedTopic = COMMISSION_GROUPS.find((group) => group.id === topicId);
@@ -291,7 +314,7 @@
   function getDepartmentCandidates(selection: SelectedLesson | null): Candidate[] {
     if (!selection) return [];
     const row = rows.find((item) => item.date === selection.date && item.slot.number === selection.slot.number);
-    return sortCandidates(row?.teachers.filter((item) => item.teacher.id !== selection.teacher.id).map((item) => ({ person: item.teacher, status: item.status, windowPairs: item.windowPairs })) ?? []);
+    return sortCandidates(row?.teachers.filter((item) => item.teacher.id !== selection.teacher.id).map((item) => ({ person: item.teacher, status: item.status, windowPairs: item.windowPairs, lessons: item.lessons })) ?? []);
   }
 
   function sortCandidates(items: Candidate[]): Candidate[] {
@@ -376,6 +399,10 @@
   function candidateStatusText(candidate: Candidate) {
     const { status, windowPairs = 0 } = candidate;
     return status === 'error' ? 'нет данных' : status === 'busy' ? 'занят' : status === 'free' ? 'свободен' : status === 'window' ? `Окно (${formatPairCount(windowPairs)})` : status === 'no-lessons' ? 'нет занятий сегодня' : status === 'loading' ? 'загружаем…' : 'ошибка расписания';
+  }
+
+  function candidateBusyText(candidate: Candidate) {
+    return (candidate.lessons ?? []).map((lesson) => [lesson.discipline, lesson.group, lesson.auditorium ? `ауд. ${lesson.auditorium}` : ''].filter(Boolean).join(' · ')).join('; ');
   }
 
   function teacherActionLabel(state: TeacherSlot) {
@@ -479,14 +506,15 @@
     </div>
     <div slot="options" class="planner-toolbar-options sub-display-options" aria-label="Настройки отображения расписания">
       <div class="sub-status-options" aria-label="Фильтры занятости">
-        <label class="sub-display-option" class:active={activeOnly} title="Скрывает преподавателей без занятий в течение дня"><input type="checkbox" bind:checked={activeOnly} /> Скрывать преподавателей без занятий сегодня</label>
-        <label class="sub-display-option" class:active={showFreeTeachers} title="Показывает преподавателей, свободных в выбранную пару и без окон в течение дня"><input type="checkbox" bind:checked={showFreeTeachers} /> Показывать свободных без окон</label>
-        <label class="sub-display-option" class:active={showWindowTeachers} title="Показывает преподавателей, свободных в выбранную пару, но с окнами в течение дня"><input type="checkbox" bind:checked={showWindowTeachers} /> Показывать свободных с окнами</label>
+        <label class="sub-display-option" class:active={activeOnly} title="Скрывает преподавателей без занятий в течение дня"><input type="checkbox" bind:checked={activeOnly} /> Скрывать без пар сегодня</label>
+        <label class="sub-display-option" class:active={showFreeTeachers} title="Показывает преподавателей, свободных в выбранную пару и без окон в течение дня"><input type="checkbox" bind:checked={showFreeTeachers} /> Свободные без окон</label>
+        <label class="sub-display-option" class:active={showWindowTeachers} title="Показывает преподавателей, свободных в выбранную пару, но с окнами в течение дня"><input type="checkbox" bind:checked={showWindowTeachers} /> Свободные с окнами</label>
       </div>
       <div class="sub-detail-options" aria-label="Отображаемые сведения">
-        <label class="sub-display-option" class:active={showSubjects}><input type="checkbox" bind:checked={showSubjects} /> Отображать предметы</label>
-        <label class="sub-display-option" class:active={showGroups}><input type="checkbox" bind:checked={showGroups} /> Отображать группы</label>
-        <label class="sub-display-option" class:active={showAuditoriums}><input type="checkbox" bind:checked={showAuditoriums} /> Отображать аудитории</label>
+        <label class="sub-display-option" class:active={hideDepartmentMeetings} title="Скрывает преподавателей, у которых в этой паре заседание кафедры"><input type="checkbox" bind:checked={hideDepartmentMeetings} /> Скрывать заседания кафедр</label>
+        <label class="sub-display-option" class:active={showSubjects} title="Отображать названия занятий"><input type="checkbox" bind:checked={showSubjects} /> Предметы</label>
+        <label class="sub-display-option" class:active={showGroups} title="Отображать группы занятий"><input type="checkbox" bind:checked={showGroups} /> Группы</label>
+        <label class="sub-display-option" class:active={showAuditoriums} title="Отображать аудитории занятий"><input type="checkbox" bind:checked={showAuditoriums} /> Аудитории</label>
       </div>
     </div>
   </PlannerToolbar>
@@ -512,15 +540,12 @@
               <div class="table-row" role="row">
                 <div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                 {#each row.cells as cell (cell.key)}
-                  {@const visibleLanes = activeOnly ? cell.lanes.filter((lane) => {
-                    const status = teacherSlot(cell.date, row.slot.number, lane.entity.id)?.status;
-                    return status === 'busy' || status === 'error' || (showFreeTeachers && status === 'free') || (showWindowTeachers && status === 'window');
-                  }) : cell.lanes}
-                  <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:today-column={cell.date === currentDateIso} class:out-of-range={cell.outOfRange}>
+                  {@const visibleLanes = visibleSubstitutionLanes(cell, cell.date, row.slot.number, hideDepartmentMeetings, activeOnly, showFreeTeachers, showWindowTeachers)}
+                  <div role="cell" class="cell-wrap viewer-cell-wrap sub-schedule-cell" class:today-column={cell.date === currentDateIso} class:out-of-range={cell.outOfRange} class:sub-cell-empty={visibleLanes.length === 0}>
                     {#if cell.outOfRange}
                       <div class="slot-cell out-of-range"><span class="cell-muted">Вне периода</span></div>
                     {:else}
-                      <div class="viewer-lines-stack">
+                      <div class="viewer-lines-stack" class:sub-empty-lines={visibleLanes.length === 0}>
                         {#each visibleLanes as lane (lane.entity.id)}
                           {@const state = teacherSlot(cell.date, row.slot.number, lane.entity.id)}
                           {#if state}
@@ -528,9 +553,9 @@
                               <span class="viewer-line-entity" title={lane.entity.label}>{formatShortName(lane.entity.label)}:</span>
                               {#if state.status === 'busy'}
                                 {#if showSubjects || showGroups || showAuditoriums}<div class="viewer-line-lessons">
-                                  {#if showSubjects}<div class="sub-metadata-line sub-subjects">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.discipline}>{lesson.discipline}</span>{/each}</div>{/if}
-                                  {#if showGroups}<div class="sub-metadata-line sub-groups">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.group}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.group}>{lesson.group}{#if lesson.subgroup} · подгр. {lesson.subgroup}{/if}</span>{/if}{/each}</div>{/if}
-                                  {#if showAuditoriums}<div class="sub-metadata-line sub-auditoriums">{#each lane.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.auditorium}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={`ауд. ${lesson.auditorium}`}>ауд. {lesson.auditorium}</span>{/if}{/each}</div>{/if}
+                                  {#if showSubjects}<div class="sub-metadata-line sub-subjects">{#each state.lessons as lesson, lessonIndex (lessonIndex)}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.discipline}>{lesson.discipline}</span>{/each}</div>{/if}
+                                  {#if showGroups}<div class="sub-metadata-line sub-groups">{#each state.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.group}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={lesson.group}>{lesson.group}{#if lesson.subgroup} · подгр. {lesson.subgroup}{/if}</span>{/if}{/each}</div>{/if}
+                                  {#if showAuditoriums}<div class="sub-metadata-line sub-auditoriums">{#each state.lessons as lesson, lessonIndex (lessonIndex)}{#if lesson.auditorium}<span class="sub-metadata-item" data-lesson-index={lessonIndex} title={`ауд. ${lesson.auditorium}`}>ауд. {lesson.auditorium}</span>{/if}{/each}</div>{/if}
                                 </div>{/if}
                               {:else}
                                 <span class="sub-status-text">{state.status === 'free' ? 'Свободен' : state.status === 'window' ? `Окно (${formatPairCount(state.windowPairs)})` : state.status === 'error' ? 'Нет данных' : 'Нет занятий сегодня'}</span>
@@ -538,6 +563,7 @@
                             </div>
                           {/if}
                         {/each}
+                        {#if visibleLanes.length === 0}<span class="sub-empty-cell-note">Нет преподавателей для отображения</span>{/if}
                       </div>
                     {/if}
                   </div>
@@ -556,7 +582,7 @@
     <div class="sub-modal slot-replacement-modal" role="dialog" aria-modal="true" aria-labelledby="slot-replacement-title">
       <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => slotReplacementPick = null}>×</button>
       <span class="section-kicker">ПОДБОР ЗАМЕНЫ</span>
-      <h2 id="slot-replacement-title">Кого заменить этой парой?</h2>
+      <h2 id="slot-replacement-title">Кого заменить этим преподавателем?</h2>
       <p class="sub-modal-context"><strong>Заменяющий: {slotReplacementPick.replacement.label}</strong><br />Дата и пара уже заданы выбранной клеткой. Выберите преподавателя и занятие.</p>
       <div class="sub-candidate-list slot-replacement-target-list">
         {#each slotReplacementTargets(slotReplacementPick) as target (target.teacher.id + ':' + String(target.lesson.rawEvent.lessonOid ?? target.lesson.discipline + ':' + (target.lesson.group ?? '') + ':' + (target.lesson.subgroup ?? '')))}
@@ -591,7 +617,7 @@
         <div class="sub-candidate-list">
           {#each departmentCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status === 'busy' || candidate.status === 'error' || candidate.status === 'loading'} on:click={() => selectReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b>
+              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small>{#if candidate.status === 'busy' && candidateBusyText(candidate)}<small class="candidate-busy-detail">Занят: {candidateBusyText(candidate)}</small>{/if}</span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}<p class="field-hint">Кроме заменяемого преподавателя на кафедре больше никого нет.</p>{/each}
         </div>
@@ -601,7 +627,7 @@
         <div class="sub-candidate-list">
           {#each topicCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => selectReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong></span><b>{candidateStatusText(candidate)}</b>
+              <span><strong>{candidate.person.label}</strong>{#if candidate.status === 'busy' && candidateBusyText(candidate)}<small class="candidate-busy-detail">Занят: {candidateBusyText(candidate)}</small>{/if}</span><b>{candidateStatusText(candidate)}</b>
             </button>
           {:else}{#if topicId && !topicLoading}<p class="field-hint">В этой группе нет других участников.</p>{/if}{/each}
         </div>
@@ -611,7 +637,7 @@
         <div class="sub-candidate-list">
           {#each otherCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => selectReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small></span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
+              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small>{#if candidate.status === 'busy' && candidateBusyText(candidate)}<small class="candidate-busy-detail">Занят: {candidateBusyText(candidate)}</small>{/if}</span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
             </button>
           {/each}
         </div>
@@ -673,15 +699,15 @@
 <style>
   :global(.workspace.substitution-workspace){max-width:1600px;padding-bottom:155px}
   .substitution-legend{gap:9px 20px;padding:0 2px;color:#66796f;font-size:10px;font-weight:700}.substitution-legend span{display:flex;align-items:center;gap:6px}.sub-legend-dot{display:inline-block;width:11px;height:11px;border-radius:3px}.sub-legend-dot.free{background:#eaf4ed;border:1px solid #c9e6d2}.sub-legend-dot.window{background:#fdfaf0;border:1px solid #f2e2b6}.sub-legend-dot.no-lessons{background:#fde8e8;border:1px solid #f6c0c0}.sub-legend-dot.busy{background:#edf1ee;border:1px solid #dbe2dd}.sub-display-options{display:flex;flex:1 1 100%;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;width:100%;margin-left:0}.sub-status-options{display:flex;align-items:center;justify-content:flex-start;flex-wrap:wrap;gap:7px}.sub-detail-options{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:5px;margin-left:auto}.sub-display-option{display:flex;align-items:center;gap:6px;border:1px solid #dbe6dc;border-radius:7px;background:#fff;color:#718279;padding:6px 9px;font-size:10px;font-weight:800;white-space:nowrap;cursor:pointer;transition:background .12s,border-color .12s,color .12s}.sub-display-option.active{background:#eaf4ed;border-color:#c9e6d2;color:#286247}.sub-display-option input{width:13px;height:13px;margin:0;accent-color:#38886c}.sub-lesson-tooltip{z-index:1200;min-width:260px}
-  .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
+  .sub-schedule-table{min-width:1380px}.sub-schedule-table .table-row{grid-template-columns:86px repeat(6,minmax(215px,1fr));border-top:2px solid #dce5dc}.sub-schedule-table .table-row.table-head{border-top:0}.sub-schedule-table .table-row>div+div{border-left:2px solid #dce5dc}.sub-schedule-table .table-head>div{border-color:#dce5dc}.sub-schedule-cell{padding:4px 5px}.sub-empty-lines{flex:1;justify-content:center}.sub-empty-cell-note{display:block;padding:8px;color:#89968d;text-align:center;font-size:10px;font-weight:600}.sub-teacher-line{align-items:center;flex-wrap:nowrap;gap:5px}.sub-teacher-line.details-lines{align-items:stretch;flex-direction:column;gap:3px}.sub-teacher-line.details-lines .viewer-line-entity{flex:0 0 auto;max-width:100%}.sub-teacher-line[role="button"]{cursor:pointer}.sub-teacher-line[role="button"]:hover{filter:brightness(.98)}.sub-teacher-line .viewer-line-entity{flex:0 1 112px;max-width:112px}.sub-teacher-line .viewer-line-lessons{flex:1 1 0;width:0;min-width:0}.sub-teacher-line.details-lines .viewer-line-lessons{flex:none;width:100%}.sub-teacher-line.sub-free{background:#eaf4ed;border:1px solid #c9e6d2;color:#235c3b}.sub-teacher-line.sub-window{background:#fdfaf0;border:1px solid #f2e2b6;color:#7a541c}.sub-teacher-line.sub-no-lessons{background:#fff0f0;border:1px solid #f6c0c0;color:#a32a2a}.sub-teacher-line.sub-error{background:#f2f4f2;border:1px solid #dbe2dd;color:#718279}.sub-metadata-line{display:flex;align-items:baseline;gap:4px;min-width:0;overflow:hidden;font-size:9px;line-height:1.25}.sub-metadata-item{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#344d40}.sub-metadata-item:not(:last-child)::after{content:' ·';color:#71887b}.sub-groups .sub-metadata-item{color:#71887b}.sub-status-text{overflow:hidden;text-overflow:ellipsis;font-size:9px;font-weight:700;white-space:nowrap}
   .sub-state{background:white;border:1px solid #e4eae3;border-radius:10px;padding:28px;color:#6c7f74;font-size:13px}.sub-state.error{color:#9d3838;background:#fff8f8;border-color:#f1d6d6}
-  .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
+  .sub-modal-backdrop{position:fixed;inset:0;z-index:1100;background:rgba(18,39,31,.42);display:grid;place-items:center;padding:18px}.sub-modal{position:relative;width:min(610px,100%);max-height:min(86vh,800px);overflow:auto;background:#fff;border:1px solid #dce7df;border-radius:14px;padding:26px;box-shadow:0 24px 70px rgba(17,47,35,.24)}.sub-modal-close{position:absolute;right:16px;top:13px;border:0;background:transparent;color:#75877d;font-size:25px}.sub-modal h2{margin:7px 35px 5px 0;color:#214b3b;font-size:23px;letter-spacing:-.04em}.sub-modal-context{margin:0 0 18px;color:#75867c;font-size:11px;line-height:1.7}.sub-candidate-tabs{display:flex;flex-wrap:wrap;gap:4px;padding:4px;border-radius:8px;background:#f1f5f1;margin:15px 0}.sub-candidate-tabs button{border:0;background:transparent;border-radius:6px;padding:8px 10px;color:#718279;font-size:10px;font-weight:800}.sub-candidate-tabs button.active{background:#fff;color:#275b47;box-shadow:0 1px 4px #173e291a}.sub-topic-select{margin:0 0 10px}.sub-candidate-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}.sub-candidate{display:flex;align-items:center;justify-content:space-between;gap:10px;width:100%;text-align:left;border:1px solid #e3eae4;border-radius:7px;padding:9px 10px;background:#fff;color:#365543}.sub-candidate.is-picked{border-color:#6fa88a!important;box-shadow:inset 3px 0 #4d9472}.sub-candidate>span{display:flex;flex-direction:column;gap:3px;min-width:0}.sub-candidate strong{font-size:11px}.sub-candidate small{font-size:8px;color:#819187}.sub-candidate small.candidate-busy-detail{color:#52685b;font-size:9px;font-weight:700}.sub-candidate b{font-size:8px;white-space:nowrap;border-radius:4px;padding:5px 7px}.sub-candidate.status-free b{background:#dcefe1}.sub-candidate.status-window b{background:#faeec7}.sub-candidate.status-no-lessons b{background:#fbdede}.sub-candidate:disabled{cursor:default;opacity:.85}.sub-candidate:not(:disabled):hover{filter:brightness(.97)}.sub-candidate i{font-style:normal;font-size:17px;color:#829187}.sub-loading-note{margin:10px 0 0;color:#79897f;font-size:10px}.sub-notice{background:#eef7f0;border:1px solid #cfe6d3;border-radius:7px;padding:10px;color:#28623c;font-size:11px}.sub-modal-footnote{margin:15px 0 0;color:#849289;font-size:9px;line-height:1.6}
   .confirmed-replacements-trigger{position:fixed;right:30px;bottom:24px;z-index:1050;display:flex;align-items:center;gap:11px;border:1px solid #2d6b4f;border-radius:12px;background:#193c31;color:#fff;padding:10px 14px;box-shadow:0 14px 35px rgba(18,58,40,.28);text-align:left;transition:transform .15s,background .15s}.confirmed-replacements-trigger:hover{background:#245744;transform:translateY(-2px)}.confirmed-replacements-trigger .selection-count{flex:none}.confirmed-replacements-trigger>span:nth-child(2){display:flex;flex-direction:column;gap:2px;min-width:120px}.confirmed-replacements-trigger strong{font-size:11px}.confirmed-replacements-trigger small{font-size:9px;color:#b4d5bd}.confirmed-replacements-open{display:grid;place-items:center;width:30px;height:30px;border-radius:7px;background:#335a49;color:#d8efdc;font-size:16px}
   .sub-board-notice{margin:0 0 12px;padding:9px 12px;border:1px solid #cfe6d3;border-radius:7px;background:#eef7f0;color:#28623c;font-size:11px}
   .sub-confirm-bar{position:sticky;bottom:-26px;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.sub-confirm-bar>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.sub-confirm-bar strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.sub-confirm-bar .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}.sub-confirm-bar .primary-button:disabled{opacity:.7}
   .confirmed-replacements-modal{max-width:720px}.confirmed-replacements-list{display:flex;flex-direction:column;gap:8px;max-height:min(54vh,500px);overflow:auto}.confirmed-replacement-card{display:grid;grid-template-columns:minmax(125px,.75fr) minmax(0,2fr) 28px;align-items:center;gap:12px;padding:12px;border:1px solid #dfe9e1;border-radius:9px;background:#fbfdfb}.confirmed-replacement-date,.confirmed-replacement-detail{display:flex;flex-direction:column;gap:4px;min-width:0}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{color:#315946;font-size:10px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{color:#7d8e83;font-size:9px;line-height:1.4}.confirmed-replacement-detail strong{overflow-wrap:anywhere}.confirmed-replacement-detail i{color:#81ad92;font-style:normal;padding:0 3px}.confirmed-replacement-card>button{width:27px;height:27px;border:0;border-radius:6px;background:#f5e9e7;color:#a45b55;font-size:18px}.confirmed-replacements-empty{display:grid;justify-items:center;gap:8px;padding:35px 20px;border:1px dashed #dce8de;border-radius:9px;background:#fbfdfb;text-align:center}.confirmed-replacements-empty>span{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#eaf4ed;color:#579374;font-size:20px}.confirmed-replacements-empty strong{color:#385e49;font-size:12px}.confirmed-replacements-empty p{max-width:340px;margin:0;color:#819187;font-size:10px;line-height:1.6}.confirmed-replacements-clear{display:block;margin:13px 0 0 auto;border:0;background:transparent;color:#a45b55;font-size:10px;font-weight:800}
   .slot-replacement-modal{max-width:720px}.slot-replacement-modal .sub-modal-context strong{color:#315946}.slot-replacement-target{min-height:57px}.slot-replacement-target small{font-size:9px;line-height:1.45}.slot-replacement-target b{flex:none;background:#eef6ef;color:#2d6d54;padding:7px 9px}.slot-replacement-target.is-picked{background:#f1f8f2}.slot-replacement-confirm{position:sticky;bottom:-26px;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.slot-replacement-confirm>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.slot-replacement-confirm strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.slot-replacement-confirm .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}
-  .substitution-help{flex:1 1 100%;width:100%;margin:2px 0 0;color:#6f8176;font-size:11px;font-weight:500;line-height:1.5}.substitution-help strong{color:#315946;font-weight:800}.sub-display-option{font-size:11px;padding:7px 10px}.sub-status-text{font-size:10px;line-height:1.35}.sub-metadata-line{font-size:10px}.sub-candidate strong{font-size:12px}.sub-candidate small{font-size:10px;line-height:1.4}.sub-candidate b{font-size:9px}.sub-modal-context{font-size:12px}.sub-modal-footnote{font-size:10px}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{font-size:11px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{font-size:10px}.confirmed-replacements-empty p{font-size:11px}.slot-replacement-target{min-height:60px}.slot-replacement-target small{font-size:10px}.slot-replacement-target b{font-size:10px}.slot-replacement-confirm>div{font-size:10px}.slot-replacement-confirm strong{font-size:11px}.slot-replacement-confirm small,.sub-confirm-bar small{color:#718579;font-size:10px;line-height:1.35}.sub-confirm-bar>div{font-size:10px}.sub-confirm-bar strong{font-size:11px}.sub-teacher-line[role="button"]:focus-visible{outline:3px solid #82bca5;outline-offset:1px;position:relative;z-index:1}.sub-teacher-line:not(.sub-error):hover{border-color:#80b59a;box-shadow:0 1px 4px rgba(36,95,80,.12);filter:none}
-  @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column}.sub-detail-options{margin-left:0;justify-content:flex-start}}
+  .substitution-help{flex:1 1 100%;width:100%;margin:2px 0 0;color:#6f8176;font-size:11px;font-weight:500;line-height:1.5}.substitution-help strong{color:#315946;font-weight:800}.sub-display-options{flex-wrap:nowrap;gap:6px}.sub-status-options,.sub-detail-options{flex-wrap:nowrap;gap:4px}.sub-display-option{font-size:10px;padding:6px 7px;gap:4px}.sub-status-options .sub-display-option input,.sub-detail-options .sub-display-option input{flex:0 0 13px}.sub-status-text{font-size:10px;line-height:1.35}.sub-metadata-line{font-size:10px}.sub-candidate strong{font-size:12px}.sub-candidate small{font-size:10px;line-height:1.4}.sub-candidate b{font-size:9px}.sub-modal-context{font-size:12px}.sub-modal-footnote{font-size:10px}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{font-size:11px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{font-size:10px}.confirmed-replacements-empty p{font-size:11px}.slot-replacement-target{min-height:60px}.slot-replacement-target small{font-size:10px}.slot-replacement-target b{font-size:10px}.slot-replacement-confirm>div{font-size:10px}.slot-replacement-confirm strong{font-size:11px}.slot-replacement-confirm small,.sub-confirm-bar small{color:#718579;font-size:10px;line-height:1.35}.sub-confirm-bar>div{font-size:10px}.sub-confirm-bar strong{font-size:11px}.sub-teacher-line[role="button"]:focus-visible{outline:3px solid #82bca5;outline-offset:1px;position:relative;z-index:1}.sub-teacher-line:not(.sub-error):hover{border-color:#80b59a;box-shadow:0 1px 4px rgba(36,95,80,.12);filter:none}
+  @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column;flex-wrap:wrap}.sub-status-options,.sub-detail-options{flex-wrap:wrap}.sub-detail-options{margin-left:0;justify-content:flex-start}}
   @media(max-width:560px){:global(.workspace.substitution-workspace){padding-bottom:125px}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}.sub-confirm-bar{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.sub-confirm-bar .primary-button{width:100%;justify-content:center}.confirmed-replacement-card{grid-template-columns:minmax(0,1fr) 28px}.confirmed-replacement-date{grid-column:1}.confirmed-replacement-detail{grid-column:1;grid-row:2}.confirmed-replacement-card>button{grid-column:2;grid-row:1 / span 2}.confirmed-replacements-trigger{right:14px;bottom:max(14px,env(safe-area-inset-bottom));padding:8px 10px;gap:8px}.confirmed-replacements-trigger>span:nth-child(2){min-width:0}.confirmed-replacements-trigger .selection-count{width:32px;height:32px;font-size:17px}.slot-replacement-confirm{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.slot-replacement-confirm .primary-button{width:100%;justify-content:center}}
 </style>

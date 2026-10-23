@@ -1987,6 +1987,11 @@ select:focus,
   flex-direction: column;
 }
 
+.viewer-cell-wrap.viewer-cell-no-lessons,
+.viewer-cell-wrap.sub-cell-empty {
+  background: #eef1ed;
+}
+
 .viewer-lines-stack {
   display: flex;
   flex-direction: column;

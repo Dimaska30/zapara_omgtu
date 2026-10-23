@@ -1435,7 +1435,7 @@
                           </div>
 
                           {#each row.cells as cell (cell.key)}
-                            <div role="cell" class="cell-wrap viewer-cell-wrap" class:today-column={cell.date === currentDateIso} class:out-of-range={cell.outOfRange}>
+                            <div role="cell" class="cell-wrap viewer-cell-wrap" class:today-column={cell.date === currentDateIso} class:out-of-range={cell.outOfRange} class:viewer-cell-no-lessons={!cell.lanes.some((lane) => lane.lessons.length > 0)}>
                               {#if cell.outOfRange}
                                 <div class="slot-cell out-of-range">
                                   <span class="cell-muted">Вне периода</span>
