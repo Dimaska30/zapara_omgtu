@@ -144,6 +144,8 @@
   let viewerShowSubject = false;
   let viewerShowAuditorium = true;
   let viewerDepartmentGroups: ScheduleViewerEntity[] = [];
+  let viewerCustomGroups: ScheduleViewerEntity[] = [];
+  let viewerSelectableGroups: ScheduleViewerEntity[] = [];
   let viewerGroupColumns: { year: string; groups: ScheduleViewerEntity[] }[] = [];
   let viewerSelectedGroupIds = new Set<string>();
   let viewerDisplayEntities: ScheduleViewerEntity[] = [];
@@ -174,7 +176,8 @@
       .map(([year, items]) => ({ year, groups: items }));
   }
 
-  $: viewerGroupColumns = groupViewerGroupsByYear(viewerDepartmentGroups);
+  $: viewerSelectableGroups = [...viewerDepartmentGroups, ...viewerCustomGroups];
+  $: viewerGroupColumns = groupViewerGroupsByYear(viewerSelectableGroups);
 
   async function loadViewerDepartmentGroups() {
     const start = viewerStart;
@@ -203,7 +206,8 @@
 
         const oldIds = new Set(viewerDepartmentGroups.map((group) => group.id));
         const groups = [...groupsById.values()].sort((a, b) => a.label.localeCompare(b.label, 'ru'));
-        const selectedIds = new Set([...viewerSelectedGroupIds].filter((id) => groupsById.has(id)));
+        const customIds = new Set(viewerCustomGroups.map((group) => group.id));
+        const selectedIds = new Set([...viewerSelectedGroupIds].filter((id) => groupsById.has(id) || customIds.has(id)));
         for (const group of groups) if (!oldIds.has(group.id)) selectedIds.add(group.id);
         viewerDepartmentGroups = groups;
         viewerSelectedGroupIds = selectedIds;
@@ -225,7 +229,16 @@
   function viewerScheduleEntities(): ScheduleViewerEntity[] {
     return viewerGroupMode === 'all'
       ? viewerDepartmentGroups
-      : viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id));
+      : viewerSelectableGroups.filter((group) => viewerSelectedGroupIds.has(group.id));
+  }
+
+  function addViewerGroup(item: SearchItem) {
+    const group: ScheduleViewerEntity = { ...item, type: 'group' };
+    const existing = viewerSelectableGroups.find((candidate) => candidate.id === group.id);
+    if (!existing) viewerCustomGroups = [...viewerCustomGroups, group];
+    viewerGroupMode = 'selected';
+    viewerSelectedGroupIds = new Set([...viewerSelectedGroupIds, group.id]);
+    if (viewerHasGenerated) void generateScheduleView();
   }
 
   function toggleViewerGroup(id: string) {
@@ -251,7 +264,7 @@
   }
 
   function selectAllViewerGroups(checked: boolean) {
-    viewerSelectedGroupIds = new Set(checked ? viewerDepartmentGroups.map((group) => group.id) : []);
+    viewerSelectedGroupIds = new Set(checked ? viewerSelectableGroups.map((group) => group.id) : []);
     if (viewerHasGenerated) void generateScheduleView();
   }
 
@@ -1299,18 +1312,21 @@
         </div>
       {/if}
     {:else if page === 'schedule'}
-      <PlannerPageFrame section="ПРОСМОТР" sectionNumber="05" breadcrumb="Расписание" title="Расписание" description="Расписание групп МО и ФИТ на выбранный период" icon="▦" on:home={() => go('home')}>
+      <PlannerPageFrame section="ПРОСМОТР" sectionNumber="05" breadcrumb="Расписание" title="Расписание" description="Расписание выбранных групп на выбранный период" icon="▦" on:home={() => go('home')}>
           <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания" className={viewerGroupMode === 'selected' ? 'viewer-controls viewer-top-controls has-group-selection' : 'viewer-controls viewer-top-controls'}>
             <div class="field-block viewer-stream-picker">
               <div class="field-head">
-                <label>Группы МО и ФИТ</label>
+                <label>Группы</label>
                 <span>{viewerGroupCatalogLoading ? '…' : viewerHasGenerated ? `${viewerDisplayEntities.length} из ${viewerScheduleEntities().length}` : viewerScheduleEntities().length}</span>
               </div>
               <div class="viewer-stream-controls">
-                <div class="commission-choice" role="group" aria-label="Выбор групп ПМФИ">
+                <div class="commission-choice" role="group" aria-label="Выбор групп">
                   <button type="button" class:active={viewerGroupMode === 'all'} aria-pressed={viewerGroupMode === 'all'} on:click={() => { viewerGroupMode = 'all'; if (viewerHasGenerated) void generateScheduleView(); }}>Все группы</button>
                   <button type="button" class:active={viewerGroupMode === 'selected'} aria-pressed={viewerGroupMode === 'selected'} on:click={() => { viewerGroupMode = 'selected'; if (viewerHasGenerated) void generateScheduleView(); }}>Выбрать группы</button>
                 </div>
+              </div>
+              <div class="viewer-add-group">
+                <SearchField type="group" placeholder="Добавить группу по названию" onPick={addViewerGroup} />
               </div>
               {#if viewerGroupCatalogLoading}
                 <span class="viewer-catalog-loading"><i></i>Загружаем группы МО и ФИТ…</span>
@@ -1318,8 +1334,8 @@
                 <p class="form-error">{viewerGroupCatalogError}</p>
                 <button class="viewer-stream-retry" type="button" on:click={() => { viewerGroupCatalogKey = ''; void loadViewerDepartmentGroups(); }}>Повторить загрузку</button>
               {:else if viewerGroupMode === 'selected'}
-                <div class="viewer-stream-actions"><span>Выбрано {viewerDepartmentGroups.filter((group) => viewerSelectedGroupIds.has(group.id)).length} из {viewerDepartmentGroups.length}</span><span><button type="button" on:click={() => selectAllViewerGroups(true)}>Выбрать все</button><button type="button" on:click={() => selectAllViewerGroups(false)}>Снять выбор</button></span></div>
-                <div class="viewer-stream-list" aria-label="Группы кафедры ПМФИ">
+                <div class="viewer-stream-actions"><span>Выбрано {viewerSelectableGroups.filter((group) => viewerSelectedGroupIds.has(group.id)).length} из {viewerSelectableGroups.length}</span><span><button type="button" on:click={() => selectAllViewerGroups(true)}>Выбрать все</button><button type="button" on:click={() => selectAllViewerGroups(false)}>Снять выбор</button></span></div>
+                <div class="viewer-stream-list" aria-label="Доступные группы">
                   {#each viewerGroupColumns as column (column.year)}
                     {@const selectedInYear = column.groups.filter((group) => viewerSelectedGroupIds.has(group.id)).length}
                     <div class="viewer-stream-cohort">

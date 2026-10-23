@@ -58,6 +58,8 @@
 .viewer-stream-picker{margin-top:13px;padding:12px;border:1px solid #e2ebe2;border-radius:9px;background:#fbfdfa}
 .viewer-stream-picker>.field-head{margin-bottom:8px}
 .viewer-stream-picker .commission-choice{margin-bottom:8px}
+.viewer-add-group{margin:0 0 8px}
+.viewer-add-group .search-input-wrap input{height:38px}
 .viewer-stream-picker .field-hint,.viewer-stream-picker .form-error{margin:6px 0 0;line-height:1.5}
 .viewer-stream-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:8px 0;color:#83958a;font-size:9px;font-weight:700}
 .viewer-stream-actions>span:last-child{display:flex;gap:8px}
