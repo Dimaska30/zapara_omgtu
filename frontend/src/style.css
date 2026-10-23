@@ -342,8 +342,8 @@ select:focus,
   border-color: #f2e6c7;
 }
 .tooltip-entity-card.card-no-lessons{
-  background: #fff7f7;
-  border-color: #f6c0c0;
+  background: #f4f7f4;
+  border: 1px dashed #9aafa2;
 }
 .tooltip-entity-card.card-busy{
   background: #f8faf9;
@@ -382,8 +382,8 @@ select:focus,
   color: #7a541c;
 }
 .card-no-lessons .entity-badge{
-  background: #fde8e8;
-  color: #a32a2a;
+  background: #e9efea;
+  color: #526b5e;
 }
 .card-busy .entity-badge{
   background: #ebf0ed;
