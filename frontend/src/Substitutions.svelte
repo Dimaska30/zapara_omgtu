@@ -441,8 +441,7 @@
       slot: selection.slot,
       lesson: selection.lesson
     };
-    const saved = persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
-    if (saved) boardNotice = `Замена подтверждена: ${selection.teacher.label} → ${pickedReplacement.label}, ${formatDate(selection.date)}.`;
+    persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
     selectedLesson = null;
     pickedReplacement = null;
   }
@@ -461,9 +460,7 @@
       slot: selection.slot,
       lesson: selection.lesson
     };
-    if (persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry])) {
-      boardNotice = `Замена подтверждена: ${selection.teacher.label} → ${replacement.label}, ${formatDate(selection.date)}.`;
-    }
+    persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
     slotReplacementPick = null;
   }
 
