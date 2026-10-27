@@ -11,6 +11,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from app.database import get_engine
+from app.dictionaries import router as dictionaries_router
 from app.schedule import router as schedule_router
 
 
@@ -22,6 +23,7 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(title="Запара API", version="0.1.0", lifespan=lifespan)
 app.include_router(schedule_router)
+app.include_router(dictionaries_router)
 
 
 @app.get("/health/live", tags=["health"])

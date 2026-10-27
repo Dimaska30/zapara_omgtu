@@ -1,0 +1,13 @@
+# Optional Linux workaround when Docker bridge networking has no outbound access.
+# Apply together with compose.backend.yaml. This publishes PostgreSQL on loopback
+# only and runs the worker in the host network namespace.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${ZAPARA_HOST_DB_PORT:-15432}:5432"
+
+  worker:
+    network_mode: host
+    environment:
+      ZAPARA_DB_HOST: 127.0.0.1
+      ZAPARA_DB_PORT: ${ZAPARA_HOST_DB_PORT:-15432}
