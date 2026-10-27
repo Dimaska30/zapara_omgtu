@@ -1,12 +1,13 @@
 from datetime import date, datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Path, Query
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from sqlalchemy import text
 
 from app.database import get_engine
+from app.auth import current_user
 
-router = APIRouter(prefix="/api/v1/schedule", tags=["schedule"])
+router = APIRouter(prefix="/api/v1/schedule", tags=["schedule"], dependencies=[Depends(current_user)])
 Kind = Literal["person", "group", "auditorium", "building"]
 
 

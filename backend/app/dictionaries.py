@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from app.database import get_engine
+from app.auth import current_user
 
-router = APIRouter(prefix="/api/v1/dictionaries", tags=["dictionaries"])
+router = APIRouter(prefix="/api/v1/dictionaries", tags=["dictionaries"], dependencies=[Depends(current_user)])
 Kind = Literal["groups", "lecturers", "buildings", "auditoriums"]
 
 

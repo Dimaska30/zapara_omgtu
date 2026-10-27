@@ -1,5 +1,6 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
+  import AppIcon from './AppIcon.svelte';
 
   export let section = '';
   export let sectionNumber = '';
@@ -23,7 +24,7 @@
       <h1>{title}<span class="heading-period">.</span></h1>
       <p>{description}</p>
     </div>
-    <div class="heading-decoration" aria-hidden="true">{icon}</div>
+    <div class="heading-decoration" aria-hidden="true"><AppIcon name={icon === '⇄' ? 'substitutions' : breadcrumb === 'Преподаватели' ? 'teacher' : 'calendar'} size={58} /></div>
   </section>
 
   <slot name="filters" />

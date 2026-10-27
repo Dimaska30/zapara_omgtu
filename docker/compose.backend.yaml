@@ -39,6 +39,23 @@ services:
       ZAPARA_UPSTREAM_INTERVAL_SECONDS: ${ZAPARA_UPSTREAM_INTERVAL_SECONDS:-}
     command: ["python", "-m", "app.schedule_worker"]
 
+  web:
+    profiles: [web]
+    build:
+      context: .
+      dockerfile: Dockerfile.nginx
+    ports:
+      - "127.0.0.1:8081:80"
+    volumes:
+      - type: bind
+        source: ../frontend/dist
+        target: /usr/share/nginx/html
+        read_only: true
+        bind:
+          create_host_path: false
+    depends_on:
+      - api
+
   api:
     <<: *backend
     ports:

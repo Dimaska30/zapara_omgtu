@@ -15,6 +15,8 @@ from uuid import uuid4
 from sqlalchemy import text
 
 from app.database import get_engine
+from app.resource_locks import lock_resource
+from app.schedule_alerts import update_schedule_alerts
 
 LOG = logging.getLogger("zapara.schedule_worker")
 BASE_URL = "https://rasp.omgtu.ru/api/schedule"
@@ -120,6 +122,51 @@ def run_once(interval: int) -> bool:
                 now = datetime.now(timezone.utc)
                 if source["next_allowed_at"] > now or (source["locked_until"] and source["locked_until"] > now):
                     return False
+                # A department needs the lecturer directory before its person IDs
+                # can be scheduled. Keep the directory in the shared queue.
+                connection.execute(text("""
+                    INSERT INTO zapara.dictionary_cache (kind, scope)
+                    SELECT 'lecturers', '' WHERE EXISTS
+                        (SELECT 1 FROM zapara.departments WHERE source_chair_oid IS NOT NULL)
+                    ON CONFLICT (kind, scope) DO NOTHING
+                """))
+                connection.execute(text("""
+                    INSERT INTO zapara.dictionary_jobs (cache_id)
+                    SELECT c.id FROM zapara.dictionary_cache c
+                    WHERE c.kind='lecturers' AND c.scope='' AND
+                        (c.last_success_at IS NULL OR c.last_success_at <= now()-interval '24 hours')
+                    ON CONFLICT (cache_id) DO NOTHING
+                """))
+                # Use only verified numeric person IDs from a fresh directory;
+                # lecturerOid is a different source ID namespace.
+                connection.execute(text("""
+                    INSERT INTO zapara.schedule_windows(entity_kind,external_id,range_start,range_end)
+                    SELECT DISTINCT 'person',item->>'person',
+                        (date_trunc('week',now() AT TIME ZONE 'Asia/Omsk')::date + n*7),
+                        (date_trunc('week',now() AT TIME ZONE 'Asia/Omsk')::date + n*7 + 6)
+                    FROM zapara.dictionary_cache c
+                    CROSS JOIN LATERAL jsonb_array_elements(c.payload) AS item
+                    JOIN zapara.departments d ON item->>'chairOid'=d.source_chair_oid
+                    CROSS JOIN generate_series(0,4) AS n
+                    WHERE c.kind='lecturers' AND c.scope='' AND c.last_success_at>now()-interval '24 hours'
+                      AND item->>'person' ~ '^[0-9]{1,20}$'
+                    ON CONFLICT (entity_kind,external_id,range_start) DO NOTHING
+                """))
+                connection.execute(text("""
+                    INSERT INTO zapara.schedule_jobs (window_id)
+                    SELECT w.id FROM zapara.schedule_windows w
+                    WHERE w.entity_kind='person'
+                      AND w.range_start>=date_trunc('week',now() AT TIME ZONE 'Asia/Omsk')::date
+                      AND w.range_start<date_trunc('week',now() AT TIME ZONE 'Asia/Omsk')::date + 35
+                      AND (w.last_success_at IS NULL OR w.last_success_at<=now()-interval '24 hours')
+                      AND EXISTS (
+                          SELECT 1 FROM zapara.dictionary_cache c
+                          CROSS JOIN LATERAL jsonb_array_elements(c.payload) AS item
+                          JOIN zapara.departments d ON item->>'chairOid'=d.source_chair_oid
+                          WHERE c.kind='lecturers' AND c.scope='' AND c.last_success_at>now()-interval '24 hours'
+                            AND item->>'person'=w.external_id)
+                    ON CONFLICT (window_id) DO NOTHING
+                """))
                 # Refresh previously requested windows in the current and next four
                 # weeks while they have been used recently. Department discovery
                 # and creation of new windows are a later stage.
@@ -187,10 +234,15 @@ def run_once(interval: int) -> bool:
                     LOG.warning("Discarded response after lease expired")
                     return False
                 if error is None:
+                    if job_kind == "schedule":
+                        for day in range(7):
+                            lock_resource(connection, job["entity_kind"], job["external_id"], job["range_start"] + timedelta(days=day))
                     connection.execute(text(f"""
                         UPDATE zapara.{cache_table} SET payload = CAST(:payload AS jsonb),
                             last_success_at = now(), last_attempt_at = now(), last_error = NULL WHERE id = :id
                     """), {"payload": json.dumps(payload, ensure_ascii=False), "id": job["id"]})
+                    if job_kind == "schedule":
+                        update_schedule_alerts(connection, job, payload)
                     connection.execute(text(f"DELETE FROM zapara.{job_table} WHERE {job_key} = :id"), {"id": job["id"]})
                 else:
                     delay = max(error.retry_seconds, min(3600, 30 * (2 ** min(job["failures"], 7))) + random.randint(0, 15))

@@ -3,6 +3,10 @@
   import CustomSelect from './CustomSelect.svelte';
   import SearchField from './SearchField.svelte';
   import Substitutions from './Substitutions.svelte';
+  import Admin from './Admin.svelte';
+  import AppIcon from './AppIcon.svelte';
+  import TeacherSchedule from './TeacherSchedule.svelte';
+  import { account, accountChecking, restoreAccount, setAccount, mayPlan, unreadNotifications } from './lib/account';
   import PlannerPageFrame from './PlannerPageFrame.svelte';
   import PlannerFilterBar from './PlannerFilterBar.svelte';
   import PlannerToolbar from './PlannerToolbar.svelte';
@@ -42,7 +46,7 @@
   } from './lib/schedule';
   import { COMMISSION_GROUPS } from './lib/commission';
 
-  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'schedule';
+  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'schedule' | 'teachers' | 'admin';
   type LoadedSchedule = {
     start: string;
     finish: string;
@@ -56,18 +60,22 @@
     auditoriumEvents: Map<string, ApiItem[]>;
     auditoriums: SearchItem[];
   };
-  const sections: { page: Page; number: string; name: string; description: string; icon: string; active: boolean }[] = [
-    { page: 'retakes', number: '01', name: 'Пересдачи', description: 'Подберите время для повторной сдачи', icon: '↗', active: true },
-    { page: 'consultations', number: '02', name: 'Консультации', description: 'Найдите общие свободные окна', icon: '◷', active: true },
-    { page: 'substitutions', number: '03', name: 'Замены', description: 'Найдите коллег для замены занятий', icon: '⇄', active: true },
-    { page: 'meetings', number: '04', name: 'Рабочие встречи', description: 'Найдите общее время для коллег', icon: '✧', active: true },
-    { page: 'schedule', number: '05', name: 'Расписание', description: 'Сравнение расписаний групп МО и ФИТ', icon: '▦', active: true }
+  const sections: { page: Page; name: string; description: string; icon: 'calendar' | 'teacher' | 'consultations' | 'retakes' | 'substitutions' | 'meetings'; guest: boolean }[] = [
+    { page: 'schedule', name: 'Расписание групп', description: 'Занятия групп на выбранный период', icon: 'calendar', guest: true },
+    { page: 'teachers', name: 'Расписание преподавателей', description: 'Найдите преподавателя и его занятия', icon: 'teacher', guest: true },
+    { page: 'consultations', name: 'Консультации', description: 'Подберите время для преподавателя и групп', icon: 'consultations', guest: false },
+    { page: 'retakes', name: 'Пересдачи', description: 'Найдите время для повторной сдачи', icon: 'retakes', guest: false },
+    { page: 'substitutions', name: 'Замены', description: 'Выберите занятие и заменяющего', icon: 'substitutions', guest: false },
+    { page: 'meetings', name: 'Встречи', description: 'Сопоставьте расписания преподавателей', icon: 'meetings', guest: false }
   ];
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
   let currentDateIso = toIso(new Date());
 
   let page: Page = 'home';
+  let activationToken = '';
   let uiPage: Page = 'home';
+  $: canPlan = mayPlan($account);
+  $: if (!$accountChecking && !canPlan && ['retakes', 'consultations', 'substitutions', 'meetings'].includes(page)) { invalidate(); page = 'schedule'; void loadViewerDepartmentGroups().then(generateScheduleView); }
   $: uiPage = page;
   let teacher: SearchItem | null = null;
   let retakeMode: 'first' | 'commission' = 'first';
@@ -469,9 +477,12 @@
   }
 
   onMount(() => {
+    const activation = new URLSearchParams(location.hash.slice(1)).get('activation');
+    if (activation) { setAccount(null); activationToken = activation; page = 'admin'; history.replaceState(null, '', location.pathname + location.search); }
+    else void restoreAccount();
     ensureBuildings();
     const updateCurrentDate = () => { currentDateIso = toIso(new Date()); };
-    const currentDateTimer = window.setInterval(updateCurrentDate, 60_000);
+    const currentDateTimer = window.setInterval(() => { updateCurrentDate(); void restoreAccount(); }, 60_000);
     const handleScroll = () => {
       hideTooltip();
       hideViewerTooltip();
@@ -788,7 +799,7 @@
     showSelectedModal = false;
   }
 
-  function go(next: Page) { if (next !== page) { invalidate(); auditoriums = []; } if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2); page = next; if (next === 'schedule') void loadViewerDepartmentGroups().then(generateScheduleView); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  function go(next: Page) { if (['retakes', 'consultations', 'substitutions', 'meetings'].includes(next) && !canPlan) { invalidate(); page = 'admin'; window.scrollTo({ top: 0, behavior: 'smooth' }); return; } if (next !== page) { invalidate(); auditoriums = []; } if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2); page = next; if (next === 'schedule') void loadViewerDepartmentGroups().then(generateScheduleView); window.scrollTo({ top: 0, behavior: 'smooth' }); }
   function dateShort(value: string) { return formatDate(value, { day: '2-digit', month: '2-digit' }); }
   function freeCommission(cell: Cell) { return cell.commission.filter((entry) => entry.available).map((entry) => entry.person.label); }
   function commissionReason(reason: 'free' | 'busy' | 'no-lessons' | 'load-error') { return reason === 'free' ? (page === 'substitutions' ? 'может заменить' : 'может присутствовать') : reason === 'busy' ? 'занят в это время' : reason === 'no-lessons' ? 'нет пар в этот день' : 'расписание не загрузилось'; }
@@ -975,7 +986,7 @@
 <svelte:window on:scroll={() => { hideTooltip(); hideViewerTooltip(); }} />
 
 <svelte:head>
-  <title>{page === 'home' ? 'Запара — планирование для преподавателей' : page === 'consultations' ? 'Консультации — Запара' : `${sections.find((section) => section.page === page)?.name} — Запара`}</title>
+  <title>{page === 'home' ? 'Запара — планирование для преподавателей' : page === 'consultations' ? 'Консультации — Запара' : page === 'admin' ? 'Аккаунты — Запара' : `${sections.find((section) => section.page === page)?.name} — Запара`}</title>
 </svelte:head>
 
 <div class="site-shell">
@@ -986,57 +997,38 @@
     </button>
     <nav aria-label="Основная навигация">
       <button type="button" class:nav-current={page === 'home'} on:click={() => go('home')}>Главная</button>
-      <button type="button" class:nav-current={page === 'retakes'} on:click={() => go('retakes')}>Пересдачи</button>
-      <button type="button" class:nav-current={page === 'consultations'} on:click={() => go('consultations')}>Консультации</button>
-      <button type="button" class:nav-current={page === 'substitutions'} on:click={() => go('substitutions')}>Замены</button>
-      <button type="button" class:nav-current={page === 'meetings'} on:click={() => go('meetings')}>Встречи</button>
-      <button type="button" class:nav-current={page === 'schedule'} on:click={() => go('schedule')}>Расписание</button>
+      <button type="button" class:nav-current={page === 'schedule'} on:click={() => go('schedule')}>Группы</button>
+      <button type="button" class:nav-current={page === 'teachers'} on:click={() => go('teachers')}>Преподаватели</button>
+      {#if canPlan}
+        <button type="button" class:nav-current={page === 'consultations'} on:click={() => go('consultations')}>Консультации</button>
+        <button type="button" class:nav-current={page === 'retakes'} on:click={() => go('retakes')}>Пересдачи</button>
+        <button type="button" class:nav-current={page === 'substitutions'} on:click={() => go('substitutions')}>Замены</button>
+        <button type="button" class:nav-current={page === 'meetings'} on:click={() => go('meetings')}>Встречи</button>
+      {/if}
     </nav>
-    <span class="topbar-note">Расписание ОмГТУ <span class="online-dot"></span></span>
+    <button type="button" class="account-entry" class:account-entry-active={page === 'admin'} on:click={() => go('admin')}><span class="account-entry-icon" aria-hidden="true">{#if $account}{$account.user.display_name.trim().slice(0, 1).toUpperCase()}{:else}<AppIcon name="teacher" size={17} />{/if}</span><span class="account-entry-label">{$accountChecking ? 'Проверяем вход' : $account ? $account.user.display_name : 'Войти'}</span>{#if $account && $unreadNotifications}<span class="account-unread" aria-label={`Непрочитанных уведомлений: ${$unreadNotifications}`}>{$unreadNotifications}</span>{/if}</button>
   </header>
 
   <main>
+    {#if canPlan && ['retakes', 'consultations', 'substitutions', 'meetings'].includes(page)}
+      <div class="planning-save-note" role="note"><span aria-hidden="true">ⓘ</span><span>{page === 'substitutions' ? 'Выбранные замены пока сохраняются только в этом браузере.' : 'Выбранные пары пока не сохраняются между посещениями.'}</span></div>
+    {/if}
     {#if page === 'home'}
-      <section class="hero">
-        <div class="hero-copy">
-          <div class="eyebrow"><span class="eyebrow-line"></span> Инструмент преподавателя · ОмГТУ</div>
-          <h1>Меньше времени<br />на <em>поиск времени.</em></h1>
-          <p>Планируйте консультации, пересдачи, замены и встречи на основе актуального расписания. Выберите задачу — свободные окна найдём вместе.</p>
-          <button type="button" class="primary-button hero-button" on:click={() => go('consultations')}>Найти время для консультации <span aria-hidden="true">↗</span></button>
-          <div class="hero-footnote"><span class="mini-line"></span> Данные напрямую из расписания университета</div>
-        </div>
-        <div class="hero-visual" aria-hidden="true">
-          <div class="visual-label">НЕДЕЛЯ / ОБЗОР</div>
-          <div class="visual-header"><span>ПН</span><span>ВТ</span><span>СР</span><span>ЧТ</span><span>ПТ</span></div>
-          <div class="visual-grid">
-            {#each Array(25) as _, index}
-              <span class:visual-open={[1, 3, 7, 8, 11, 13, 16, 17, 20, 23].includes(index)} class:visual-chosen={[7, 13, 17].includes(index)}></span>
-            {/each}
-          </div>
-          <div class="visual-bottom"><span class="visual-ring">✓</span><span>Общие свободные окна<br /><strong>найдены</strong></span><span class="visual-arrow">↗</span></div>
-          <div class="visual-accent"></div>
-        </div>
-      </section>
-
-      <section class="section-picker">
-        <div class="section-heading"><div><span class="section-kicker">ВАШИ ЗАДАЧИ</span><h2>С чего начнём?</h2></div><p>Один инструмент для разных задач в расписании.</p></div>
-        <div class="section-grid">
-          {#each sections as section}
-            <button type="button" class="section-card" class:card-active={section.active} on:click={() => go(section.page)}>
-              <span class="card-top"><span>{section.number} / 04</span><span class="card-symbol">{section.icon}</span></span>
-              <span class="card-title">{section.name}</span>
-              <span class="card-description">{section.description}</span>
-              <span class="card-bottom"><span class:available={section.active}>{section.active ? 'Доступно сейчас' : 'В разработке'}</span><span class="card-arrow">↗</span></span>
-            </button>
-          {/each}
-        </div>
-      </section>
+      <div class="home-workspace">
+        <div class="home-header"><div><p class="home-context">ОМГТУ · КАФЕДРА</p><h1>Расписание и планы</h1><p>Занятия групп и преподавателей, консультации, пересдачи и замены — в одном месте.</p></div>{#if !$account}<div class="home-access"><span class="home-access-icon"><AppIcon name="teacher" size={21} /></span><div><strong>Для работы с планами</strong><small>Войдите в аккаунт кафедры</small></div><button type="button" on:click={() => go('admin')}>Войти <AppIcon name="arrow" size={16} /></button></div>{:else}<div class="home-access"><span class="home-access-icon"><AppIcon name="teacher" size={21} /></span><div><strong>{$account.user.display_name}</strong><small>{canPlan ? 'Рабочее пространство кафедры' : 'Доступ для просмотра'}</small></div><button type="button" on:click={() => go('admin')}>Аккаунт <AppIcon name="arrow" size={16} /></button></div>{/if}</div>
+        <section class="home-section"><div class="home-section-head"><div><h2>Расписание</h2><p>Откройте занятия на нужный период.</p></div><span>Данные ОмГТУ</span></div><div class="home-links home-links-schedule">{#each sections.filter((item) => item.guest) as section}<button type="button" class="home-link" on:click={() => go(section.page)}><span class="home-link-icon"><AppIcon name={section.icon} size={24} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small></span><span class="home-link-arrow"><AppIcon name="arrow" size={19} /></span></button>{/each}</div></section>
+        {#if canPlan}<section class="home-section"><div class="home-section-head"><div><h2>Планирование</h2><p>Выберите задачу, чтобы найти подходящее время.</p></div></div><div class="home-links home-links-planning">{#each sections.filter((item) => !item.guest) as section}<button type="button" class="home-link" on:click={() => go(section.page)}><span class="home-link-icon"><AppIcon name={section.icon} size={22} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small></span><span class="home-link-arrow"><AppIcon name="arrow" size={18} /></span></button>{/each}</div></section>{:else if $account}<p class="home-role-note">Для работы с планами запросите доступ у администратора кафедры.</p>{/if}
+      </div>
+    {:else if page === 'admin'}
+        <Admin {activationToken} />
+    {:else if page === 'teachers'}
+        <TeacherSchedule on:home={() => go('home')} />
     {:else if page === 'substitutions'}
         <Substitutions on:home={() => go('home')} />
     {:else if page === 'consultations' || page === 'retakes' || page === 'meetings'}
       <div class="workspace">
         <div class="breadcrumb"><button type="button" on:click={() => go('home')}>Главная</button><span>/</span><span>{page === 'retakes' ? 'Пересдачи' : uiPage === 'substitutions' ? 'Замены' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</span></div>
-        <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / {page === 'retakes' ? '01' : uiPage === 'substitutions' ? '03' : page === 'meetings' ? '04' : '02'}</span><h1>{page === 'retakes' ? 'Время для пересдачи' : uiPage === 'substitutions' ? 'Замены занятий' : page === 'meetings' ? 'Рабочие встречи' : 'Время для консультации'}<span class="heading-period">.</span></h1><p>{page === 'retakes' ? 'Найдём общий свободный слот для преподавателей и учебных групп.' : uiPage === 'substitutions' ? 'Покажем занятия преподавателя и коллег, которые могут его заменить.' : page === 'meetings' ? 'Сопоставим расписания коллег и найдём время, когда свободны все.' : 'Сопоставим расписание преподавателя и групп, чтобы найти удобные окна.'}</p></div><div class="heading-decoration" aria-hidden="true">{page === 'retakes' ? '↗' : uiPage === 'substitutions' ? '⇄' : page === 'meetings' ? '✧' : '◷'}</div></section>
+        <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / {page === 'retakes' ? '01' : uiPage === 'substitutions' ? '03' : page === 'meetings' ? '04' : '02'}</span><h1>{page === 'retakes' ? 'Время для пересдачи' : uiPage === 'substitutions' ? 'Замены занятий' : page === 'meetings' ? 'Рабочие встречи' : 'Время для консультации'}<span class="heading-period">.</span></h1><p>{page === 'retakes' ? 'Найдём общий свободный слот для преподавателей и учебных групп.' : uiPage === 'substitutions' ? 'Покажем занятия преподавателя и коллег, которые могут его заменить.' : page === 'meetings' ? 'Сопоставим расписания коллег и найдём время, когда свободны все.' : 'Сопоставим расписание преподавателя и групп, чтобы найти удобные окна.'}</p></div><div class="heading-decoration" aria-hidden="true"><AppIcon name={page === 'retakes' ? 'retakes' : page === 'meetings' ? 'meetings' : 'consultations'} size={58} /></div></section>
 
         {#if page === 'retakes'}<div class="retake-mode"><div><span class="section-kicker">ФОРМАТ</span><strong>Тип пересдачи</strong></div><div class="retake-toggle" role="group" aria-label="Тип пересдачи"><button type="button" class:active={retakeMode === 'first'} aria-pressed={retakeMode === 'first'} on:click={() => changeRetakeMode('first')}>1 пересдача</button><button type="button" class:active={retakeMode === 'commission'} aria-pressed={retakeMode === 'commission'} on:click={() => changeRetakeMode('commission')}>Комиссионная пересдача</button></div></div>{/if}
 
@@ -1354,7 +1346,7 @@
         </div>
       {/if}
     {:else if page === 'schedule'}
-      <PlannerPageFrame section="ПРОСМОТР" sectionNumber="05" breadcrumb="Расписание" title="Расписание" description="Расписание выбранных групп на выбранный период" icon="▦" on:home={() => go('home')}>
+      <PlannerPageFrame section="ПРОСМОТР" sectionNumber="01" breadcrumb="Группы" title="Расписание групп" description="Расписание выбранных групп на нужный период" icon="▦" on:home={() => go('home')}>
           <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания" className={viewerGroupMode === 'selected' ? 'viewer-controls viewer-top-controls has-group-selection' : 'viewer-controls viewer-top-controls'}>
             <div class="field-block viewer-stream-picker">
               <div class="field-head">

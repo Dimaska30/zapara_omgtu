@@ -11,6 +11,10 @@ from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from app.database import get_engine
+from app.auth import router as auth_router
+from app.admin import router as admin_router
+from app.plans import router as plans_router
+from app.notifications import router as notifications_router
 from app.dictionaries import router as dictionaries_router
 from app.schedule import router as schedule_router
 
@@ -22,6 +26,10 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Запара API", version="0.1.0", lifespan=lifespan)
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(plans_router)
+app.include_router(notifications_router)
 app.include_router(schedule_router)
 app.include_router(dictionaries_router)
 
