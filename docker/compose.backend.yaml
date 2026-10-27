@@ -31,6 +31,14 @@ services:
     profiles: [migration]
     command: ["alembic", "upgrade", "head"]
 
+  worker:
+    <<: *backend
+    profiles: [worker]
+    environment:
+      <<: *backend-env
+      ZAPARA_UPSTREAM_INTERVAL_SECONDS: ${ZAPARA_UPSTREAM_INTERVAL_SECONDS:-}
+    command: ["python", "-m", "app.schedule_worker"]
+
   api:
     <<: *backend
     ports:
