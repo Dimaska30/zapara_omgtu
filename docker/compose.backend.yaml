@@ -1,0 +1,45 @@
+name: zapara-backend
+
+x-backend: &backend
+  build:
+    context: ../backend
+  environment: &backend-env
+    ZAPARA_DB_HOST: ${ZAPARA_DB_HOST:-postgres}
+    ZAPARA_DB_PORT: ${ZAPARA_DB_PORT:-5432}
+    ZAPARA_DB_NAME: ${ZAPARA_DB_NAME:-shared}
+    ZAPARA_DB_USER: ${ZAPARA_DB_USER:-zapara}
+    ZAPARA_DB_PASSWORD: ${ZAPARA_DB_PASSWORD:?Set ZAPARA_DB_PASSWORD in docker/backend.env}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    profiles: [local-db]
+    environment:
+      POSTGRES_DB: ${ZAPARA_DB_NAME:-shared}
+      POSTGRES_USER: ${ZAPARA_DB_USER:-zapara}
+      POSTGRES_PASSWORD: ${ZAPARA_DB_PASSWORD:?Set ZAPARA_DB_PASSWORD in docker/backend.env}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    <<: *backend
+    profiles: [migration]
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    <<: *backend
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=5)"]
+      interval: 15s
+      timeout: 7s
+      retries: 3
+
+volumes:
+  postgres_data:

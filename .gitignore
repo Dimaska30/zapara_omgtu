@@ -30,3 +30,10 @@ frontend/benchmarking/.profiles
 frontend/benchmarking/compare/.results
 frontend/benchmarking/compare/.profiles
 frontend/benchmarking/compare/results.html
+
+# Backend secrets and Python artifacts
+docker/backend.env
+backend/.env
+backend/.venv/
+__pycache__/
+*.py[cod]
