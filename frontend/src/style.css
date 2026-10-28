@@ -746,6 +746,29 @@ select:focus,
   align-items: center;
   gap: 8px;
 }
+.plan-save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 31px;
+  padding: 0 10px;
+  border: 1px solid rgba(190, 222, 204, .28);
+  border-radius: 8px;
+  color: #d7e9dc;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.plan-save-state i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #91c8a1;
+}
+.plan-save-state.state-saving i,
+.plan-save-state.state-loading i { background: #e8c67d; }
+.plan-save-state.state-error { color: #ffd6cf; border-color: rgba(225, 136, 122, .5); }
+.plan-save-state.state-error i { background: #ed9587; }
 .btn-aud-finder {
   border: 0;
   background: #3b8765;
@@ -2041,6 +2064,29 @@ select:focus,
   background: #eef1ed;
 }
 
+.viewer-lesson-line.viewer-planned-lesson {
+  border: 1px solid #8bb9a5;
+  border-radius: 4px;
+  padding: 3px 5px;
+  border-color: #8bb9a5;
+  background: #f1f8f3;
+}
+
+.viewer-plan-badge {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #e3f0e7;
+  color: #28634e;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.25;
+  letter-spacing: .025em;
+  text-transform: uppercase;
+}
+
 .viewer-lines-stack {
   display: flex;
   flex-direction: column;
@@ -2213,3 +2259,58 @@ select:focus,
 @media(max-width:900px){.teacher-schedule-controls .primary-button{grid-column:3}}
 @media(max-width:760px){.home-workspace{width:calc(100% - 40px);padding:35px 0 70px}.home-header{align-items:stretch;flex-direction:column}.home-access{min-width:0;width:100%}.home-header h1{font-size:36px}}
 @media(max-width:560px){.home-workspace{width:calc(100% - 32px)}.home-links-schedule,.home-links-planning{grid-template-columns:1fr}.home-link{min-height:82px;padding:14px}.home-section{padding-top:27px}.teacher-schedule-controls .teacher-picker,.teacher-schedule-controls .primary-button{grid-column:span 2}}
+
+/* Keep the section title available to assistive technology without taking up workspace. */
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Homepage: task cards and account access. */
+.home-workspace{padding-top:36px}.home-title{font-size:26px;letter-spacing:-.04em;color:#193b31;margin:0 0 26px}.home-dashboard{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:28px;align-items:start}.home-section:first-child{padding-top:0}.home-links-planning{grid-template-columns:repeat(2,minmax(0,1fr))}.home-link{min-height:112px}.home-account-card{display:flex;flex-direction:column;align-items:flex-start;gap:14px;padding:24px;border:1px solid #dfe9df;border-radius:11px;background:#fff;color:#4b8b70}.home-account-card h2{margin:0;color:#244b3b;font-size:18px;letter-spacing:-.025em}.home-account-card p{margin:0;color:#70877a;font-size:13px;line-height:1.6}.home-account-card .primary-button{align-self:stretch;margin-top:2px;padding:14px 16px}.home-account-card small{color:#8ba093;font-size:11px;line-height:1.5}
+@media(max-width:900px){.home-dashboard{grid-template-columns:1fr}.home-account-card{max-width:none}}
+@media(max-width:560px){.home-links-planning{grid-template-columns:1fr}.home-workspace{padding-top:24px}.home-title{margin-bottom:22px}.home-link{min-height:90px}}
+
+/* Make every home action visible, while keeping permission checks explicit. */
+.home-dashboard{grid-template-columns:minmax(0,1fr) 320px;gap:30px}.home-links-planning{grid-template-columns:repeat(2,minmax(0,1fr))}.home-link{position:relative;min-height:128px;align-items:flex-start;padding:20px 18px}.home-link-icon{padding-top:2px}.home-link-text em{display:block;margin-top:9px;color:#4d8b70;font-size:11px;font-style:normal;font-weight:800}.home-link-locked .home-link-text em,.home-link-locked .home-link-arrow{color:#849589}.home-link-locked:hover{border-color:#c6d3c8;background:#fff}.home-account-card{padding:25px;border-radius:12px}.home-account-card>svg{color:#4b8b70}
+@media(max-width:900px){.home-dashboard{grid-template-columns:1fr}}
+@media(max-width:760px){.topbar nav{flex:1;min-width:0;overflow-x:auto;justify-content:flex-start;scrollbar-width:none}.topbar nav::-webkit-scrollbar{display:none}.topbar nav button{flex:none;margin-right:4px}}
+
+/* Shared, native select styling for the public auditorium filters. */
+.public-aud-controls .sub-filter select{appearance:none;-webkit-appearance:none;width:100%;height:36px;min-width:0;padding:0 32px 0 9px;border:1px solid #dce5de;border-radius:6px;background-color:#fbfdfb;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23718279' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 9px center;color:#25463a;font:inherit;font-size:11px;line-height:normal;cursor:pointer}
+.public-aud-controls .sub-filter select:focus{outline:3px solid #88cbbb;outline-offset:2px;border-color:#83bca4}
+.public-aud-controls .sub-filter select:disabled{color:#8a9b90;cursor:wait}
+.public-aud-controls .sub-filter input{height:36px;border-radius:6px;background:#fbfdfb;font-size:11px}
+@media(max-width:1200px){.public-aud-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.public-aud-controls .primary-button{grid-column:span 2}}
+@media(max-width:900px){.public-aud-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.public-aud-controls .primary-button{grid-column:span 2}}
+@media(max-width:560px){.public-aud-controls{grid-template-columns:1fr}.public-aud-controls .primary-button{grid-column:auto}}
+.public-aud-controls{grid-template-columns:minmax(170px,1.05fr) minmax(210px,1.2fr) minmax(150px,1fr) minmax(90px,.55fr) minmax(135px,.8fr) minmax(135px,.8fr)}
+.public-aud-controls .primary-button{height:36px;min-height:36px;padding:0 13px;gap:10px;border-radius:6px;box-shadow:none;font-size:11px;white-space:nowrap}
+.public-aud-controls .primary-button svg{width:15px;height:15px}
+@media(max-width:1200px){.public-aud-controls{grid-template-columns:repeat(4,minmax(0,1fr))}.public-aud-controls .primary-button{grid-column:span 2}}
+@media(max-width:900px){.public-aud-controls{grid-template-columns:repeat(2,minmax(0,1fr))}.public-aud-controls .primary-button{grid-column:span 2;justify-content:center}}
+@media(max-width:560px){.public-aud-controls{grid-template-columns:1fr}.public-aud-controls .primary-button{grid-column:auto;width:100%}}
+.public-aud-legend>span{gap:10px}
+.public-aud-legend .legend-dot{flex:0 0 9px;margin-right:1px}
+
+/* Public auditorium timetable uses the same compact calendar language as the other schedule views. */
+.aud-data-note{margin:12px 0 16px;padding:10px 13px;border:1px solid #e3ece2;border-radius:7px;background:#f3f7f1;color:#718579;font-size:11px;line-height:1.5}
+.public-aud-week{margin-top:14px}
+.public-aud-scroll{overflow:auto;background:#fff}
+.public-aud-table{width:100%;min-width:900px;table-layout:fixed;border-collapse:separate;border-spacing:0;background:#fff;color:#315b48}
+.public-aud-table th,.public-aud-table td{border-right:1px solid #e7ede6;border-bottom:1px solid #e7ede6}
+.public-aud-table tr>*:last-child{border-right:0}
+.public-aud-table thead th{height:42px;padding:8px 6px;background:#fcfdfa;color:#537a63;text-align:center;font-size:10px;font-weight:800;vertical-align:middle}
+.public-aud-table thead th:first-child{width:90px;color:#9aaa9f;font-size:8px;letter-spacing:.04em;font-weight:700}
+.public-aud-table thead th small{display:block;margin-top:3px;color:#96a79b;font-size:9px;font-weight:600}
+.public-aud-table tbody th{width:90px;height:54px;padding:7px 9px;background:#fdfefb;text-align:left;vertical-align:middle;white-space:nowrap}
+.public-aud-table tbody th strong{display:inline-block;margin-right:7px;color:#3f7557;font-size:14px;letter-spacing:-.04em}
+.public-aud-table tbody th small{display:inline-block;color:#94a59a;font-size:9px;line-height:1.4;vertical-align:middle}
+.public-aud-table tbody td{height:54px;padding:7px 8px;background:#fff;vertical-align:top}
+.public-aud-table .today-column{background:#f5faf5;box-shadow:inset 1px 0 #d6e8da,inset -1px 0 #d6e8da}
+.public-aud-table .out-of-range{background:#f0f2ef}
+.aud-free-count{display:inline-flex;align-items:center;min-height:20px;margin-bottom:6px;padding:2px 7px;border:1px solid #cfe6d5;border-radius:5px;background:#edf7ef;color:#347653;font-size:9px;font-weight:800;line-height:1.3;white-space:nowrap}
+.aud-room-list{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:3px;max-height:150px;overflow:auto;padding:1px;align-content:start;scrollbar-color:#c8d8cc #f4f7f3;scrollbar-width:thin}
+.aud-room-list span{display:block;min-width:0;overflow:hidden;padding:3px 4px;border:1px solid #e2ebe3;border-radius:4px;background:#fbfdfb;color:#466c55;text-align:center;text-overflow:ellipsis;white-space:nowrap;font-size:8px;font-weight:700;line-height:1.25}
+.aud-room-list span{cursor:help}
+.aud-room-list span:hover{border-color:#b9d8c0;background:#f0f7f0}
+.public-aud-table .cell-muted{display:block;padding:5px 2px;color:#98a79e;font-size:9px;line-height:1.4}
+@media(max-width:600px){.aud-data-note{font-size:10px}.public-aud-table{min-width:790px}.public-aud-table tbody td{padding:6px}.aud-room-list{grid-template-columns:repeat(2,minmax(0,1fr));max-height:130px}}
+.aud-room-tooltip{z-index:1200;min-width:260px}

@@ -42,6 +42,26 @@ class NewSlot(BaseModel):
         return self
 
 
+class DraftSlot(BaseModel):
+    event_date: date
+    slot_number: int = Field(gt=0, le=20)
+    starts_at: time
+    ends_at: time
+    resources: list[Resource] = Field(default_factory=list, max_length=100)
+
+    @model_validator(mode='after')
+    def validate_times(self):
+        if self.starts_at.tzinfo or self.ends_at.tzinfo or self.ends_at <= self.starts_at:
+            raise ValueError('Укажите корректное местное время пары')
+        return self
+
+
+class SaveDraft(BaseModel):
+    version: int = Field(gt=0)
+    settings: dict = Field(default_factory=dict)
+    slots: list[DraftSlot] = Field(default_factory=list, max_length=500)
+
+
 class NewSubstitution(BaseModel):
     version: int = Field(gt=0)
     slot_id: UUID
@@ -58,7 +78,8 @@ def get_plan(connection, plan_id, user_id, action='view', lock=False):
     if not row:
         raise HTTPException(404, 'План не найден')
     if action != 'view':
-        if row['role'] not in ('admin','planner') or (row['owner_id'] != user_id and row['permission'] not in (('edit','confirm') if action=='edit' else ('confirm',))):
+        shared_substitution = row['kind'] == 'substitution' and row['role'] in ('admin','planner')
+        if not shared_substitution and (row['role'] not in ('admin','planner') or (row['owner_id'] != user_id and row['permission'] not in (('edit','confirm') if action=='edit' else ('confirm',)))):
             raise HTTPException(403, 'Нет прав на изменение плана')
     return row
 
@@ -74,6 +95,18 @@ def advance(connection, plan, version, actor_id, action, details=None):
 def create_plan(body: NewPlan, user: dict = Depends(current_user)) -> dict:
     plan_id = uuid4()
     with get_engine().begin() as connection:
+        if body.kind == 'substitution':
+            # Keep one active substitution plan per department so selections are
+            # visible to every planner and do not fragment across user-owned plans.
+            connection.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {'key':f'substitution-plan:{body.department_id}'})
+            existing = connection.execute(text("""SELECT id,version FROM zapara.plans
+                WHERE department_id=:department AND kind='substitution' AND status='draft'
+                ORDER BY updated_at DESC LIMIT 1"""), {'department':body.department_id}).mappings().first()
+            if existing:
+                role = connection.execute(text("SELECT role FROM zapara.memberships WHERE user_id=:user AND department_id=:department AND status='active'"), {'user':user['id'],'department':body.department_id}).scalar_one_or_none()
+                if role not in ('admin','planner'):
+                    raise HTTPException(403, 'Нет права создавать планы кафедры')
+                return {'id':existing['id'],'version':existing['version']}
         role = connection.execute(text("SELECT role FROM zapara.memberships WHERE user_id=:user AND department_id=:department AND status='active'"), {'user':user['id'],'department':body.department_id}).scalar_one_or_none()
         if role not in ('admin','planner'):
             raise HTTPException(403, 'Нет права создавать планы кафедры')
@@ -92,6 +125,22 @@ def list_plans(department_id: UUID, user: dict = Depends(current_user)) -> list[
     return [dict(row) for row in rows]
 
 
+@router.get('/substitutions')
+def list_substitutions(department_id: UUID, user: dict = Depends(current_user)) -> list[dict]:
+    """List active substitutions for the department's shared planning view."""
+    with get_engine().connect() as connection:
+        rows = connection.execute(text("""SELECT p.id AS plan_id,p.version AS plan_version,
+                s.id AS substitution_id,s.original_person_id,s.substitute_person_id,s.status AS substitution_status,
+                s.source_snapshot,sl.id AS slot_id,sl.event_date,sl.slot_number,sl.starts_at,sl.ends_at
+            FROM zapara.substitutions s JOIN zapara.plan_slots sl ON sl.id=s.slot_id
+            JOIN zapara.plans p ON p.id=sl.plan_id
+            JOIN zapara.memberships m ON m.department_id=p.department_id
+            WHERE p.department_id=:department AND p.kind='substitution' AND p.status<>'archived'
+              AND m.user_id=:user AND m.status='active' AND s.status<>'cancelled'
+            ORDER BY sl.event_date,sl.slot_number,s.created_at"""), {'department':department_id,'user':user['id']}).mappings().all()
+    return [dict(row) for row in rows]
+
+
 @router.get('/{plan_id}')
 def read_plan(plan_id: UUID, user: dict = Depends(current_user)) -> dict:
     with get_engine().connect() as connection:
@@ -102,6 +151,42 @@ def read_plan(plan_id: UUID, user: dict = Depends(current_user)) -> dict:
             slot['substitutions'] = [dict(r) for r in connection.execute(text('SELECT * FROM zapara.substitutions WHERE slot_id=:id ORDER BY created_at'), {'id':slot['id']}).mappings().all()]
     plan['slots']=slots
     return plan
+
+
+@router.put('/{plan_id}/draft')
+def save_draft(plan_id: UUID, body: SaveDraft, user: dict = Depends(current_user)) -> dict:
+    """Replace a user's unconfirmed planning draft as one versioned snapshot."""
+    if len(json.dumps(body.settings, ensure_ascii=False)) > 64_000:
+        raise HTTPException(422, 'Настройки плана слишком велики')
+    slot_keys = [(slot.event_date, slot.slot_number) for slot in body.slots]
+    if len(slot_keys) != len(set(slot_keys)):
+        raise HTTPException(422, 'В черновике есть повторяющиеся пары')
+    try:
+        with get_engine().begin() as connection:
+            plan = get_plan(connection, plan_id, user['id'], 'edit', True)
+            if plan['kind'] == 'substitution' or plan['status'] != 'draft':
+                raise HTTPException(409, 'Этот план нельзя сохранять как черновик')
+            if connection.execute(text("SELECT EXISTS(SELECT 1 FROM zapara.plan_slots WHERE plan_id=:id AND status<>'selected')"), {'id': plan_id}).scalar_one():
+                raise HTTPException(409, 'В плане есть подтверждённые пары; сначала отмените их')
+            advance(connection, plan, body.version, user['id'], 'draft_saved', {'slots': len(body.slots)})
+            connection.execute(text("UPDATE zapara.plans SET settings=CAST(:settings AS jsonb) WHERE id=:id"), {
+                'settings': json.dumps(body.settings, ensure_ascii=False), 'id': plan_id
+            })
+            connection.execute(text("DELETE FROM zapara.slot_resources WHERE slot_id IN (SELECT id FROM zapara.plan_slots WHERE plan_id=:id)"), {'id': plan_id})
+            connection.execute(text("DELETE FROM zapara.plan_slots WHERE plan_id=:id"), {'id': plan_id})
+            for slot in body.slots:
+                slot_id = uuid4()
+                connection.execute(text("""INSERT INTO zapara.plan_slots(id,plan_id,event_date,slot_number,starts_at,ends_at)
+                    VALUES (:id,:plan,:day,:number,:start,:end)"""), {
+                    'id': slot_id, 'plan': plan_id, 'day': slot.event_date, 'number': slot.slot_number,
+                    'start': slot.starts_at, 'end': slot.ends_at
+                })
+                for resource in slot.resources:
+                    connection.execute(text("""INSERT INTO zapara.slot_resources(slot_id,kind,external_id,display_name)
+                        VALUES (:slot,:kind,:external_id,:display_name)"""), {'slot': slot_id, **resource.model_dump()})
+    except IntegrityError:
+        raise HTTPException(409, 'Пара или участник уже добавлены') from None
+    return {'id': plan_id, 'version': body.version + 1, 'saved_slots': len(body.slots)}
 
 
 @router.post('/{plan_id}/slots', status_code=201)

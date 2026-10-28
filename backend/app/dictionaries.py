@@ -9,18 +9,26 @@ from app.auth import current_user
 
 router = APIRouter(prefix="/api/v1/dictionaries", tags=["dictionaries"], dependencies=[Depends(current_user)])
 Kind = Literal["groups", "lecturers", "buildings", "auditoriums"]
+PFI_CHAIR_OID = "46"
 
 
 @router.get("/{kind}")
 def get_dictionary(
     kind: Kind,
     building_oid: str | None = Query(default=None, alias="buildingOid", pattern=r"^[0-9]{1,20}$"),
+    chair_oid: str | None = Query(default=None, alias="chairOid", pattern=r"^[0-9]{1,20}$"),
 ) -> dict:
     if building_oid is not None and kind != "auditoriums":
         raise HTTPException(status_code=422, detail="buildingOid применим только к аудиториям")
-    scope = building_oid or ""
+    if chair_oid is not None and kind != "lecturers":
+        raise HTTPException(status_code=422, detail="chairOid применим только к преподавателям")
+    if building_oid is not None and chair_oid is not None:
+        raise HTTPException(status_code=422, detail="Укажите только один фильтр справочника")
+    scope = building_oid or chair_oid or ""
     now = datetime.now(timezone.utc)
     with get_engine().begin() as connection:
+        if chair_oid is not None and chair_oid != PFI_CHAIR_OID:
+            raise HTTPException(status_code=404, detail="Состав для указанной кафедры не настроен")
         row = connection.execute(text("""
             INSERT INTO zapara.dictionary_cache (kind, scope) VALUES (:kind, :scope)
             ON CONFLICT (kind, scope) DO UPDATE SET last_accessed_at = now()
@@ -40,7 +48,7 @@ def get_dictionary(
             state = "unknown"
         else:
             state = "loading"
-    return {"kind": kind, "building_oid": building_oid, "state": state,
+    return {"kind": kind, "building_oid": building_oid, "chair_oid": chair_oid, "state": state,
             "last_success_at": row["last_success_at"],
             "error": row["last_error"] if not fresh else None,
             "items": row["payload"] if row["payload"] is not None else []}

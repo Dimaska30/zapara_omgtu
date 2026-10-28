@@ -6,6 +6,7 @@
   import Admin from './Admin.svelte';
   import AppIcon from './AppIcon.svelte';
   import TeacherSchedule from './TeacherSchedule.svelte';
+  import AuditoriumSchedule from './AuditoriumSchedule.svelte';
   import { account, accountChecking, restoreAccount, setAccount, mayPlan, unreadNotifications } from './lib/account';
   import PlannerPageFrame from './PlannerPageFrame.svelte';
   import PlannerFilterBar from './PlannerFilterBar.svelte';
@@ -27,6 +28,8 @@
     getBuildingSchedule,
     getGroupCatalog,
     getSchedule,
+    getPlannedEvents,
+    mergePlannedEvents,
     matchesAuditoriumType,
     search,
     toIso,
@@ -46,7 +49,10 @@
   } from './lib/schedule';
   import { COMMISSION_GROUPS } from './lib/commission';
 
-  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'schedule' | 'teachers' | 'admin';
+  type Page = 'home' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'schedule' | 'teachers' | 'auditoriums' | 'admin';
+  type PlanKind = 'consultation' | 'retake' | 'meeting';
+  type PlanDraft = { id: string; version: number; kind: PlanKind; settings: Record<string, any>; slots: any[] };
+  type PlanSaveState = 'idle' | 'loading' | 'saving' | 'saved' | 'error';
   type LoadedSchedule = {
     start: string;
     finish: string;
@@ -60,18 +66,27 @@
     auditoriumEvents: Map<string, ApiItem[]>;
     auditoriums: SearchItem[];
   };
-  const sections: { page: Page; name: string; description: string; icon: 'calendar' | 'teacher' | 'consultations' | 'retakes' | 'substitutions' | 'meetings'; guest: boolean }[] = [
-    { page: 'schedule', name: 'Расписание групп', description: 'Занятия групп на выбранный период', icon: 'calendar', guest: true },
-    { page: 'teachers', name: 'Расписание преподавателей', description: 'Найдите преподавателя и его занятия', icon: 'teacher', guest: true },
-    { page: 'consultations', name: 'Консультации', description: 'Подберите время для преподавателя и групп', icon: 'consultations', guest: false },
-    { page: 'retakes', name: 'Пересдачи', description: 'Найдите время для повторной сдачи', icon: 'retakes', guest: false },
-    { page: 'substitutions', name: 'Замены', description: 'Выберите занятие и заменяющего', icon: 'substitutions', guest: false },
-    { page: 'meetings', name: 'Встречи', description: 'Сопоставьте расписания преподавателей', icon: 'meetings', guest: false }
+  const sections: { page: Page; name: string; description: string; icon: 'calendar' | 'teacher' | 'consultations' | 'retakes' | 'substitutions' | 'meetings' | 'building'; guest: boolean }[] = [
+    { page: 'schedule', name: 'Расписание групп', description: 'Посмотрите занятия одной или нескольких групп на выбранные даты.', icon: 'calendar', guest: true },
+    { page: 'teachers', name: 'Расписание преподавателей', description: 'Найдите преподавателя по фамилии и откройте его занятия.', icon: 'teacher', guest: true },
+    { page: 'auditoriums', name: 'Свободные аудитории', description: 'Посмотрите свободные помещения корпуса по дням и парам.', icon: 'building', guest: true },
+    { page: 'consultations', name: 'Консультации', description: 'Найдите свободное время преподавателя и выбранных групп.', icon: 'consultations', guest: false },
+    { page: 'retakes', name: 'Пересдачи', description: 'Подберите время для пересдачи или работы комиссии.', icon: 'retakes', guest: false },
+    { page: 'substitutions', name: 'Замены', description: 'Найдите занятие и подберите преподавателя для замены.', icon: 'substitutions', guest: false },
+    { page: 'meetings', name: 'Встречи', description: 'Найдите время, когда все выбранные преподаватели свободны.', icon: 'meetings', guest: false }
   ];
   const dayNames = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
   let currentDateIso = toIso(new Date());
 
   let page: Page = 'home';
+  let activePlan: PlanDraft | null = null;
+  let planSaveState: PlanSaveState = 'idle';
+  let planSaveMessage = '';
+  let draftHydrated = false;
+  let pendingPlanRestore: any[] | null = null;
+  let draftSaveTimer: number | null = null;
+  let savedDraftSignature = '';
+  let draftSaveChain: Promise<void> = Promise.resolve();
   let activationToken = '';
   let uiPage: Page = 'home';
   $: canPlan = mayPlan($account);
@@ -171,6 +186,8 @@
   let viewerLoading: boolean = false;
   let viewerError: string | null = null;
   let viewerHasGenerated: boolean = false;
+  let viewerLoadTimer: number | null = null;
+  let viewerRequestId = 0;
 
   function groupViewerGroupsByYear(groups: ScheduleViewerEntity[]) {
     const columns = new Map<string, ScheduleViewerEntity[]>();
@@ -241,13 +258,22 @@
       : viewerSelectableGroups.filter((group) => viewerSelectedGroupIds.has(group.id));
   }
 
+  function queueViewerSchedule(delay = 220) {
+    viewerRequestId++;
+    if (viewerLoadTimer !== null) window.clearTimeout(viewerLoadTimer);
+    viewerLoadTimer = window.setTimeout(() => {
+      viewerLoadTimer = null;
+      if (viewerStart && viewerFinish && viewerStart <= viewerFinish) void generateScheduleView();
+    }, delay);
+  }
+
   function addViewerGroup(item: SearchItem) {
     const group: ScheduleViewerEntity = { ...item, type: 'group' };
     const existing = viewerSelectableGroups.find((candidate) => candidate.id === group.id);
     if (!existing) viewerCustomGroups = [...viewerCustomGroups, group];
     viewerGroupMode = 'selected';
     viewerSelectedGroupIds = new Set([...viewerSelectedGroupIds, group.id]);
-    if (viewerHasGenerated) void generateScheduleView();
+    queueViewerSchedule();
   }
 
   function toggleViewerGroup(id: string) {
@@ -278,16 +304,10 @@
   }
 
   function applyViewerGroupSelection() {
-    if (!viewerHasGenerated) return;
     const entities = viewerScheduleEntities();
     viewerLoadedEntities = entities;
     applyViewerDisplayFilter();
-    const cacheKey = `${viewerStart}:${viewerFinish}`;
-    if (entities.some((entity) => !viewerEventsByEntity.has(`${entity.type}:${entity.id}`) || viewerScheduleFailedIds.has(`${entity.type}:${entity.id}`))) {
-      void generateScheduleView();
-    } else if (viewerScheduleCacheRange !== cacheKey) {
-      void generateScheduleView();
-    }
+    queueViewerSchedule();
   }
 
   function applyViewerDisplayFilter() {
@@ -328,12 +348,22 @@
   }
 
   async function generateScheduleView() {
+    const requestId = ++viewerRequestId;
+    const rangeStart = viewerStart;
+    const rangeFinish = viewerFinish;
+    if (!rangeStart || !rangeFinish || rangeStart > rangeFinish) return;
     if (viewerGroupCatalogKey !== `${viewerStart}:${viewerFinish}`) {
       await loadViewerDepartmentGroups();
+      if (requestId !== viewerRequestId) return;
     }
     const entities = viewerScheduleEntities();
     if (entities.length === 0) {
-      viewerError = 'Выберите хотя бы одну группу МО или ФИТ.';
+      viewerLoading = false;
+      viewerHasGenerated = false;
+      viewerError = null;
+      viewerLoadedEntities = [];
+      viewerDisplayEntities = [];
+      viewerWeeks = [];
       return;
     }
     const cacheKey = `${viewerStart}:${viewerFinish}`;
@@ -351,11 +381,14 @@
     try {
       const entityEventsMap = new Map(viewerEventsByEntity);
       const failedIds = new Set(viewerScheduleFailedIds);
+      viewerLoadedEntities = entities.filter((entity) => entityEventsMap.has(`${entity.type}:${entity.id}`));
+      viewerHasGenerated = viewerLoadedEntities.length > 0;
+      applyViewerDisplayFilter();
       await Promise.all(
         missingEntities.map(async (entity) => {
           const key = `${entity.type}:${entity.id}`;
           try {
-            const events = await getSchedule(entity.type, entity.id, viewerStart, viewerFinish);
+            const events = await getSchedule(entity.type, entity.id, rangeStart, rangeFinish);
             entityEventsMap.set(key, events);
             failedIds.delete(key);
           } catch (e) {
@@ -363,8 +396,24 @@
             failedIds.add(key);
             entityEventsMap.set(key, []);
           }
+          if (requestId !== viewerRequestId) return;
+          viewerEventsByEntity = new Map(entityEventsMap);
+          viewerScheduleFailedIds = new Set(failedIds);
+          viewerLoadedEntities = entities.filter((item) => entityEventsMap.has(`${item.type}:${item.id}`));
+          viewerScheduleCacheRange = cacheKey;
+          viewerHasGenerated = viewerLoadedEntities.length > 0;
+          applyViewerDisplayFilter();
         })
       );
+      try {
+        const planned = await getPlannedEvents(rangeStart, rangeFinish);
+        for (const entity of entities) {
+          const key = `${entity.type}:${entity.id}`;
+          entityEventsMap.set(key, mergePlannedEvents(entityEventsMap.get(key) ?? [], planned, entity.type, entity.id));
+        }
+      } catch (planError) {
+        console.error('Не удалось загрузить общие записи планирования:', planError);
+      }
       viewerLoadedEntities = entities;
       viewerEventsByEntity = entityEventsMap;
       viewerScheduleFailedIds = failedIds;
@@ -372,9 +421,9 @@
       applyViewerDisplayFilter();
       viewerHasGenerated = true;
     } catch (e: any) {
-      viewerError = e?.message ?? 'Не удалось загрузить расписание для выбранных объектов';
+      if (requestId === viewerRequestId) viewerError = e?.message ?? 'Не удалось загрузить расписание для выбранных объектов';
     } finally {
-      viewerLoading = false;
+      if (requestId === viewerRequestId) viewerLoading = false;
     }
   }
 
@@ -418,12 +467,15 @@
   let hasGenerated = false;
   let requestController: AbortController | null = null;
   let requestNumber = 0;
+  let generateTimer: number | null = null;
   let loadedSchedule: LoadedSchedule | null = null;
   $: selectedCount = selected.size;
   $: selectedDetails = weeks.flatMap((week) => week.rows.flatMap((row) => row.cells.filter((cell) => selected.has(cell.key)).map((cell) => ({ cell, slot: row.slot }))));
   $: selectedCommissionGroup = COMMISSION_GROUPS.find((group) => group.id === commissionGroupId);
 
   function invalidate() {
+    if (generateTimer !== null) window.clearTimeout(generateTimer);
+    generateTimer = null;
     hideTooltip();
     showSelectedModal = false;
     showAudModal = false;
@@ -437,6 +489,162 @@
     error = '';
     failedCommissionCount = 0;
     loadedSchedule = null;
+    if (activePlan && isPlanningPage(page)) {
+      pendingPlanRestore = null;
+      draftHydrated = true;
+    }
+  }
+
+  function planKindFor(target: Page): PlanKind | null {
+    return target === 'consultations' ? 'consultation' : target === 'retakes' ? 'retake' : target === 'meetings' ? 'meeting' : null;
+  }
+
+  function isPlanningPage(target: Page = page) { return planKindFor(target) !== null; }
+
+  async function planningRequest(path: string, method = 'GET', body?: unknown) {
+    if (!$account?.token || !$account.departmentId) throw new Error('Войдите в аккаунт кафедры, чтобы сохранять выбранное.');
+    const response = await fetch(`/backend-api/plans${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${$account.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    if (!response.ok) {
+      let payload: any = {};
+      try { payload = await response.json(); } catch { /* Keep a readable fallback for empty responses. */ }
+      const error = new Error(typeof payload.detail === 'string' ? payload.detail : payload.detail?.message || `Не удалось сохранить план (${response.status}).`) as Error & { status?: number };
+      error.status = response.status;
+      throw error;
+    }
+    return response.status === 204 ? null : response.json();
+  }
+
+  function restorePlanSettings(settings: Record<string, any>) {
+    const searchItems = (value: unknown): SearchItem[] => Array.isArray(value) ? value.filter((item) => item && typeof item.id === 'string' && typeof item.label === 'string') : [];
+    if (settings.start) start = String(settings.start);
+    if (settings.finish) finish = String(settings.finish);
+    if (settings.teacher && typeof settings.teacher.id === 'string') teacher = settings.teacher;
+    if (Array.isArray(settings.groups)) groups = searchItems(settings.groups) as Group[];
+    if (Array.isArray(settings.auditoriums)) auditoriums = searchItems(settings.auditoriums);
+    if (Array.isArray(settings.commissionTeachers)) commissionTeachers = searchItems(settings.commissionTeachers);
+    if (Array.isArray(settings.meetingTeachers)) meetingTeachers = searchItems(settings.meetingTeachers);
+    if (settings.retakeMode === 'first' || settings.retakeMode === 'commission') retakeMode = settings.retakeMode;
+    if (settings.commissionChoice === 'people' || settings.commissionChoice === 'group') commissionChoice = settings.commissionChoice;
+    if (typeof settings.commissionGroupId === 'string') commissionGroupId = settings.commissionGroupId;
+    if (typeof settings.mercy === 'boolean') mercy = settings.mercy;
+    selected = new Set();
+    slotAssignedAuditoriums = new Map();
+  }
+
+  async function loadPagePlan(target: Page) {
+    const kind = planKindFor(target);
+    if (!kind || !$account?.departmentId || !$account?.token) return;
+    const departmentId = $account.departmentId;
+    const userId = $account.user.id;
+    activePlan = null;
+    pendingPlanRestore = null;
+    draftHydrated = false;
+    planSaveState = 'loading';
+    planSaveMessage = '';
+    try {
+      const plans = await planningRequest(`?department_id=${encodeURIComponent(departmentId)}`) as any[];
+      if (page !== target || $account?.user.id !== userId || $account.departmentId !== departmentId) return;
+      let plan = plans.find((item) => item.kind === kind && item.status === 'draft' && item.owner_id === userId);
+      if (!plan) plan = await planningRequest('', 'POST', { department_id: departmentId, kind, title: sections.find((item) => item.page === target)?.name ?? '' });
+      const detail = await planningRequest(`/${plan.id}`) as PlanDraft;
+      if (page !== target || $account?.user.id !== userId || $account.departmentId !== departmentId) return;
+      activePlan = detail;
+      if (detail.settings && Object.keys(detail.settings).length) {
+        restorePlanSettings(detail.settings);
+        pendingPlanRestore = detail.slots ?? [];
+      }
+      const ready = target === 'meetings'
+        ? meetingTeachers.length > 0
+        : !!teacher && groups.length > 0 &&
+          (target !== 'retakes' || retakeMode !== 'commission' || (commissionChoice === 'people' ? commissionTeachers.length > 0 : !!commissionGroupId));
+      if (ready && start && finish && start <= finish) {
+        await generate();
+      } else {
+        pendingPlanRestore = null;
+        draftHydrated = true;
+      }
+      planSaveState = 'saved';
+      savedDraftSignature = '';
+    } catch (cause) {
+      draftHydrated = true;
+      planSaveState = 'error';
+      planSaveMessage = cause instanceof Error ? cause.message : 'Не удалось открыть сохранённый план.';
+    }
+  }
+
+  function currentDraftSettings() {
+    return {
+      page, start, finish, teacher, groups, auditoriums,
+      commissionTeachers, meetingTeachers, retakeMode, commissionChoice, commissionGroupId, mercy
+    };
+  }
+
+  function currentDraftSlots() {
+    return [...selected].flatMap((key) => {
+      const split = key.lastIndexOf('-');
+      const eventDate = key.slice(0, split);
+      const slotNumber = Number(key.slice(split + 1));
+      const slot = SLOTS.find((item) => item.number === slotNumber);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(eventDate) || !slot) return [];
+      const resources: { kind: 'person' | 'group' | 'auditorium'; external_id: string; display_name: string }[] = [];
+      const people = page === 'meetings' ? meetingTeachers : [teacher, ...(page === 'retakes' && retakeMode === 'commission' && commissionChoice === 'people' ? commissionTeachers : [])].filter((item): item is SearchItem => Boolean(item));
+      for (const person of people) resources.push({ kind: 'person', external_id: person.id, display_name: person.label });
+      if (page === 'retakes' && retakeMode === 'commission' && commissionChoice === 'group') {
+        const group = COMMISSION_GROUPS.find((item) => item.id === commissionGroupId);
+        for (const person of group?.people ?? []) resources.push({ kind: 'person', external_id: person.id, display_name: person.label });
+      }
+      if (page !== 'meetings') for (const group of groups) resources.push({ kind: 'group', external_id: group.id, display_name: group.label });
+      const auditorium = slotAssignedAuditoriums.get(key);
+      if (auditorium) resources.push({ kind: 'auditorium', external_id: auditorium.id, display_name: auditorium.name });
+      const uniqueResources = [...new Map(resources.map((resource) => [`${resource.kind}:${resource.external_id}`, resource])).values()];
+      return [{ event_date: eventDate, slot_number: slot.number, starts_at: `${slot.start}:00`, ends_at: `${slot.end}:00`, resources: uniqueResources }];
+    });
+  }
+
+  function scheduleDraftSave() {
+    if (draftSaveTimer !== null) window.clearTimeout(draftSaveTimer);
+    draftSaveTimer = window.setTimeout(() => {
+      draftSaveTimer = null;
+      draftSaveChain = draftSaveChain.then(saveCurrentDraft).catch(() => undefined);
+    }, 500);
+  }
+
+  async function saveCurrentDraft() {
+    const plan = activePlan;
+    const target = page;
+    if (!plan || !draftHydrated || !isPlanningPage(target)) return;
+    planSaveState = 'saving';
+    planSaveMessage = '';
+    const body = { version: plan.version, settings: currentDraftSettings(), slots: currentDraftSlots() };
+    try {
+      let result: { version: number };
+      try {
+        result = await planningRequest(`/${plan.id}/draft`, 'PUT', body) as { version: number };
+      } catch (cause) {
+        if ((cause as Error & { status?: number }).status !== 409) throw cause;
+        const latest = await planningRequest(`/${plan.id}`) as PlanDraft;
+        if (activePlan?.id !== plan.id || page !== target) return;
+        body.version = latest.version;
+        result = await planningRequest(`/${plan.id}/draft`, 'PUT', body) as { version: number };
+      }
+      if (activePlan?.id !== plan.id || page !== target) return;
+      activePlan = { ...plan, version: result.version, settings: body.settings };
+      planSaveState = 'saved';
+      planSaveMessage = '';
+    } catch (cause) {
+      planSaveState = 'error';
+      planSaveMessage = cause instanceof Error ? cause.message : 'Не удалось сохранить план.';
+    }
+  }
+
+  $: draftSignature = isPlanningPage(page) ? JSON.stringify({ page, start, finish, teacher, groups, auditoriums, commissionTeachers, meetingTeachers, retakeMode, commissionChoice, commissionGroupId, mercy, selected: [...selected].sort(), assignments: [...slotAssignedAuditoriums.entries()] }) : '';
+  $: if (draftHydrated && activePlan && isPlanningPage(page) && draftSignature !== savedDraftSignature) {
+    savedDraftSignature = draftSignature;
+    scheduleDraftSave();
   }
 
   function rebuildFromLoaded() {
@@ -491,6 +699,9 @@
     return () => {
       window.clearInterval(currentDateTimer);
       window.removeEventListener('scroll', handleScroll, true);
+      if (generateTimer !== null) window.clearTimeout(generateTimer);
+      if (viewerLoadTimer !== null) window.clearTimeout(viewerLoadTimer);
+      viewerRequestId++;
     };
   });
 
@@ -528,7 +739,7 @@
       } catch (e) {
         console.error('Failed to load auditorium schedule', e);
       }
-    }
+    } else queueGenerate();
   }
 
   function addAuditoriumFromItem(item: AuditoriumItem) {
@@ -672,11 +883,11 @@
     }
   }
 
-  function chooseTeacher(item: SearchItem) { invalidate(); committeeError = ''; teacher = item; commissionTeachers = commissionTeachers.filter((person) => person.id !== item.id); }
+  function chooseTeacher(item: SearchItem) { invalidate(); committeeError = ''; teacher = item; commissionTeachers = commissionTeachers.filter((person) => person.id !== item.id); queueGenerate(); }
   function removeTeacher() { invalidate(); committeeError = ''; teacher = null; }
-  function changeRetakeMode(mode: 'first' | 'commission') { if (retakeMode !== mode) { invalidate(); retakeMode = mode; committeeError = ''; } }
-  function changeCommissionChoice(choice: 'people' | 'group') { if (commissionChoice !== choice) { invalidate(); commissionChoice = choice; committeeError = ''; } }
-  function changeCommissionGroup(id: string) { invalidate(); commissionGroupId = id; }
+  function changeRetakeMode(mode: 'first' | 'commission') { if (retakeMode !== mode) { invalidate(); retakeMode = mode; committeeError = ''; queueGenerate(); } }
+  function changeCommissionChoice(choice: 'people' | 'group') { if (commissionChoice !== choice) { invalidate(); commissionChoice = choice; committeeError = ''; queueGenerate(); } }
+  function changeCommissionGroup(id: string) { invalidate(); commissionGroupId = id; queueGenerate(); }
   function changeMercy(value: boolean) { mercy = value; rebuildFromLoaded(); }
   function commissionCandidates(): SearchItem[] {
     if (page !== 'substitutions' && (page !== 'retakes' || retakeMode !== 'commission')) return [];
@@ -690,23 +901,26 @@
     invalidate();
     committeeError = '';
     commissionTeachers = [...commissionTeachers, item];
+    queueGenerate();
   }
-  function removeCommissionTeacher(id: string) { invalidate(); committeeError = ''; commissionTeachers = commissionTeachers.filter((person) => person.id !== id); }
+  function removeCommissionTeacher(id: string) { invalidate(); committeeError = ''; commissionTeachers = commissionTeachers.filter((person) => person.id !== id); queueGenerate(); }
   function addMeetingTeacher(item: SearchItem) {
     if (meetingTeachers.some((person) => person.id === item.id)) { meetingError = 'Этот преподаватель уже добавлен.'; return; }
     invalidate();
     meetingError = '';
     meetingTeachers = [...meetingTeachers, item];
+    queueGenerate();
   }
-  function removeMeetingTeacher(id: string) { invalidate(); meetingError = ''; meetingTeachers = meetingTeachers.filter((person) => person.id !== id); }
+  function removeMeetingTeacher(id: string) { invalidate(); meetingError = ''; meetingTeachers = meetingTeachers.filter((person) => person.id !== id); queueGenerate(); }
   function addGroup(item: SearchItem) {
     if (groups.some((group) => group.id === item.id)) return;
     invalidate();
     groups = [...groups, item];
+    queueGenerate();
   }
-  function removeGroup(id: string) { invalidate(); groups = groups.filter((group) => group.id !== id); }
-  function changeStart(value: string) { invalidate(); start = value; }
-  function changeFinish(value: string) { invalidate(); finish = value; }
+  function removeGroup(id: string) { invalidate(); groups = groups.filter((group) => group.id !== id); queueGenerate(); }
+  function changeStart(value: string) { invalidate(); start = value; queueGenerate(); }
+  function changeFinish(value: string) { invalidate(); finish = value; queueGenerate(); }
 
   async function loadCommissionSchedules(candidates: SearchItem[], signal: AbortSignal) {
     const events = new Map<string, Awaited<ReturnType<typeof getSchedule>>>();
@@ -726,7 +940,11 @@
     const isMeeting = page === 'meetings';
     const candidates = isMeeting ? meetingTeachers : commissionCandidates();
     if ((!isMeeting && !teacher) || (!isMeeting && page !== 'substitutions' && !groups.length) || !start || !finish || start > finish || ((isMeeting || page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && !candidates.length)) return;
+    const restoreSlots = pendingPlanRestore;
+    const wasDraftHydrated = draftHydrated;
     invalidate();
+    pendingPlanRestore = restoreSlots;
+    draftHydrated = wasDraftHydrated;
     const current = ++requestNumber;
     const controller = new AbortController();
     requestController = controller;
@@ -756,15 +974,48 @@
         auditoriums
       };
       rebuildFromLoaded();
+      if (pendingPlanRestore) {
+        const restored = new Set<string>();
+        const assigned = new Map<string, AssignedAuditorium>();
+        for (const saved of pendingPlanRestore) {
+          const date = String(saved.event_date).slice(0, 10);
+          const number = Number(saved.slot_number);
+          const key = `${date}-${number}`;
+          if (weeks.some((week) => week.rows.some((row) => row.slot.number === number && row.cells.some((cell) => cell.key === key)))) restored.add(key);
+          const auditorium = (saved.resources ?? []).find((resource: any) => resource.kind === 'auditorium');
+          if (auditorium) assigned.set(key, { id: String(auditorium.external_id), name: String(auditorium.display_name || auditorium.external_id) });
+        }
+        selected = restored;
+        slotAssignedAuditoriums = assigned;
+        pendingPlanRestore = null;
+        rebuildFromLoaded();
+        draftHydrated = true;
+      } else if (activePlan && isPlanningPage(page)) draftHydrated = true;
       failedCommissionCount = commissionSchedules.failedIds.size;
       hasGenerated = true;
     } catch (cause) {
       if (current === requestNumber && !(cause instanceof DOMException && cause.name === 'AbortError')) {
         error = cause instanceof Error ? cause.message : 'Не удалось загрузить расписание.';
+        if (!pendingPlanRestore && activePlan && isPlanningPage(page)) draftHydrated = true;
       }
     } finally {
       if (current === requestNumber) loading = false;
     }
+  }
+
+  function queueGenerate(delay = 250) {
+    if (generateTimer !== null) window.clearTimeout(generateTimer);
+    generateTimer = window.setTimeout(() => {
+      generateTimer = null;
+      const isMeeting = page === 'meetings';
+      const candidates = isMeeting ? meetingTeachers : commissionCandidates();
+      const needsCandidates = isMeeting || page === 'substitutions' || (page === 'retakes' && retakeMode === 'commission');
+      if ((isMeeting ? meetingTeachers.length > 0 : !!teacher) &&
+          (isMeeting || page === 'substitutions' || groups.length > 0) &&
+          (!needsCandidates || candidates.length > 0) && start && finish && start <= finish) {
+        void generate();
+      }
+    }, delay);
   }
 
   function toggle(cell: Cell) {
@@ -799,7 +1050,24 @@
     showSelectedModal = false;
   }
 
-  function go(next: Page) { if (['retakes', 'consultations', 'substitutions', 'meetings'].includes(next) && !canPlan) { invalidate(); page = 'admin'; window.scrollTo({ top: 0, behavior: 'smooth' }); return; } if (next !== page) { invalidate(); auditoriums = []; } if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2); page = next; if (next === 'schedule') void loadViewerDepartmentGroups().then(generateScheduleView); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+  async function go(next: Page) {
+    if (['retakes', 'consultations', 'substitutions', 'meetings'].includes(next) && !canPlan) {
+      invalidate(); activePlan = null; draftHydrated = false; page = 'admin';
+      window.scrollTo({ top: 0, behavior: 'smooth' }); return;
+    }
+    if (next !== page && isPlanningPage(page) && activePlan) {
+      if (draftSaveTimer !== null) { window.clearTimeout(draftSaveTimer); draftSaveTimer = null; }
+      await draftSaveChain;
+      await saveCurrentDraft();
+    }
+    if (next !== page) { invalidate(); auditoriums = []; }
+    activePlan = null; pendingPlanRestore = null; draftHydrated = false; planSaveState = 'idle'; planSaveMessage = '';
+    if (next === 'retakes' && commissionTeachers.length > 2) commissionTeachers = commissionTeachers.slice(0, 2);
+    page = next;
+    if (isPlanningPage(next)) void loadPagePlan(next);
+    if (next === 'schedule') void loadViewerDepartmentGroups().then(generateScheduleView);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
   function dateShort(value: string) { return formatDate(value, { day: '2-digit', month: '2-digit' }); }
   function freeCommission(cell: Cell) { return cell.commission.filter((entry) => entry.available).map((entry) => entry.person.label); }
   function commissionReason(reason: 'free' | 'busy' | 'no-lessons' | 'load-error') { return reason === 'free' ? (page === 'substitutions' ? 'может заменить' : 'может присутствовать') : reason === 'busy' ? 'занят в это время' : reason === 'no-lessons' ? 'нет пар в этот день' : 'расписание не загрузилось'; }
@@ -999,6 +1267,7 @@
       <button type="button" class:nav-current={page === 'home'} on:click={() => go('home')}>Главная</button>
       <button type="button" class:nav-current={page === 'schedule'} on:click={() => go('schedule')}>Группы</button>
       <button type="button" class:nav-current={page === 'teachers'} on:click={() => go('teachers')}>Преподаватели</button>
+      <button type="button" class:nav-current={page === 'auditoriums'} on:click={() => go('auditoriums')}>Аудитории</button>
       {#if canPlan}
         <button type="button" class:nav-current={page === 'consultations'} on:click={() => go('consultations')}>Консультации</button>
         <button type="button" class:nav-current={page === 'retakes'} on:click={() => go('retakes')}>Пересдачи</button>
@@ -1011,24 +1280,40 @@
 
   <main>
     {#if canPlan && ['retakes', 'consultations', 'substitutions', 'meetings'].includes(page)}
-      <div class="planning-save-note" role="note"><span aria-hidden="true">ⓘ</span><span>{page === 'substitutions' ? 'Выбранные замены пока сохраняются только в этом браузере.' : 'Выбранные пары пока не сохраняются между посещениями.'}</span></div>
+      <div class="planning-save-note" role="note"><AppIcon name="info" size={18} /><span>{page === 'substitutions' ? 'Выбранные замены сохраняются в базе кафедры и доступны планировщикам.' : 'Черновик автоматически сохраняется в вашем аккаунте и восстановится при следующем входе.'}</span></div>
     {/if}
     {#if page === 'home'}
       <div class="home-workspace">
-        <div class="home-header"><div><p class="home-context">ОМГТУ · КАФЕДРА</p><h1>Расписание и планы</h1><p>Занятия групп и преподавателей, консультации, пересдачи и замены — в одном месте.</p></div>{#if !$account}<div class="home-access"><span class="home-access-icon"><AppIcon name="teacher" size={21} /></span><div><strong>Для работы с планами</strong><small>Войдите в аккаунт кафедры</small></div><button type="button" on:click={() => go('admin')}>Войти <AppIcon name="arrow" size={16} /></button></div>{:else}<div class="home-access"><span class="home-access-icon"><AppIcon name="teacher" size={21} /></span><div><strong>{$account.user.display_name}</strong><small>{canPlan ? 'Рабочее пространство кафедры' : 'Доступ для просмотра'}</small></div><button type="button" on:click={() => go('admin')}>Аккаунт <AppIcon name="arrow" size={16} /></button></div>{/if}</div>
-        <section class="home-section"><div class="home-section-head"><div><h2>Расписание</h2><p>Откройте занятия на нужный период.</p></div><span>Данные ОмГТУ</span></div><div class="home-links home-links-schedule">{#each sections.filter((item) => item.guest) as section}<button type="button" class="home-link" on:click={() => go(section.page)}><span class="home-link-icon"><AppIcon name={section.icon} size={24} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small></span><span class="home-link-arrow"><AppIcon name="arrow" size={19} /></span></button>{/each}</div></section>
-        {#if canPlan}<section class="home-section"><div class="home-section-head"><div><h2>Планирование</h2><p>Выберите задачу, чтобы найти подходящее время.</p></div></div><div class="home-links home-links-planning">{#each sections.filter((item) => !item.guest) as section}<button type="button" class="home-link" on:click={() => go(section.page)}><span class="home-link-icon"><AppIcon name={section.icon} size={22} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small></span><span class="home-link-arrow"><AppIcon name="arrow" size={18} /></span></button>{/each}</div></section>{:else if $account}<p class="home-role-note">Для работы с планами запросите доступ у администратора кафедры.</p>{/if}
+        <h1 class="home-title">Разделы</h1>
+        <div class="home-dashboard">
+          <div class="home-sections">
+            <section class="home-section" aria-labelledby="home-schedule-title">
+              <div class="home-section-head"><div><h2 id="home-schedule-title">Расписание</h2><p>Просмотр расписания ОмГТУ без входа.</p></div></div>
+              <div class="home-links home-links-schedule">{#each sections.filter((item) => item.guest) as section}<button type="button" class="home-link" on:click={() => go(section.page)}><span class="home-link-icon"><AppIcon name={section.icon} size={24} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small><em>Открыто для всех</em></span><span class="home-link-arrow"><AppIcon name="arrow" size={19} /></span></button>{/each}</div>
+            </section>
+            <section class="home-section" aria-labelledby="home-planning-title">
+              <div class="home-section-head"><div><h2 id="home-planning-title">Планирование</h2><p>Инструменты для работы кафедры.</p></div></div>
+              <div class="home-links home-links-planning">{#each sections.filter((item) => !item.guest) as section}<button type="button" class="home-link" class:home-link-locked={!canPlan} on:click={() => canPlan ? go(section.page) : go('admin')}><span class="home-link-icon"><AppIcon name={section.icon} size={22} /></span><span class="home-link-text"><strong>{section.name}</strong><small>{section.description}</small><em>{canPlan ? 'Открыть раздел' : 'Войдите, чтобы открыть'}</em></span><span class="home-link-arrow">{#if canPlan}<AppIcon name="arrow" size={18} />{:else}<AppIcon name="lock" size={17} />{/if}</span></button>{/each}</div>
+            </section>
+          </div>
+          <aside class="home-account-card" aria-labelledby="home-account-title">
+            <AppIcon name="teacher" size={26} />
+            {#if !$account}<h2 id="home-account-title">Аккаунт кафедры</h2><p>Войдите, чтобы планировать консультации, пересдачи, замены и встречи.</p><button type="button" class="primary-button" on:click={() => go('admin')}>Войти в аккаунт <AppIcon name="arrow-up-right" size={17} /></button><small>Нет доступа? Обратитесь к администратору кафедры.</small>
+            {:else}<h2 id="home-account-title">{$account.user.display_name}</h2><p>{canPlan ? 'Ваше рабочее пространство кафедры готово.' : 'У вас доступ для просмотра. Для планирования обратитесь к администратору кафедры.'}</p><button type="button" class="primary-button" on:click={() => go('admin')}>Открыть аккаунт <AppIcon name="arrow-up-right" size={17} /></button>{/if}
+          </aside>
+        </div>
       </div>
     {:else if page === 'admin'}
         <Admin {activationToken} />
     {:else if page === 'teachers'}
         <TeacherSchedule on:home={() => go('home')} />
+    {:else if page === 'auditoriums'}
+        <AuditoriumSchedule on:home={() => go('home')} />
     {:else if page === 'substitutions'}
         <Substitutions on:home={() => go('home')} />
     {:else if page === 'consultations' || page === 'retakes' || page === 'meetings'}
       <div class="workspace">
-        <div class="breadcrumb"><button type="button" on:click={() => go('home')}>Главная</button><span>/</span><span>{page === 'retakes' ? 'Пересдачи' : uiPage === 'substitutions' ? 'Замены' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</span></div>
-        <section class="workspace-heading"><div><span class="section-kicker">ПЛАНИРОВАНИЕ / {page === 'retakes' ? '01' : uiPage === 'substitutions' ? '03' : page === 'meetings' ? '04' : '02'}</span><h1>{page === 'retakes' ? 'Время для пересдачи' : uiPage === 'substitutions' ? 'Замены занятий' : page === 'meetings' ? 'Рабочие встречи' : 'Время для консультации'}<span class="heading-period">.</span></h1><p>{page === 'retakes' ? 'Найдём общий свободный слот для преподавателей и учебных групп.' : uiPage === 'substitutions' ? 'Покажем занятия преподавателя и коллег, которые могут его заменить.' : page === 'meetings' ? 'Сопоставим расписания коллег и найдём время, когда свободны все.' : 'Сопоставим расписание преподавателя и групп, чтобы найти удобные окна.'}</p></div><div class="heading-decoration" aria-hidden="true"><AppIcon name={page === 'retakes' ? 'retakes' : page === 'meetings' ? 'meetings' : 'consultations'} size={58} /></div></section>
+        <h1 class="visually-hidden">{page === 'retakes' ? 'Пересдачи' : page === 'meetings' ? 'Рабочие встречи' : 'Консультации'}</h1>
 
         {#if page === 'retakes'}<div class="retake-mode"><div><span class="section-kicker">ФОРМАТ</span><strong>Тип пересдачи</strong></div><div class="retake-toggle" role="group" aria-label="Тип пересдачи"><button type="button" class:active={retakeMode === 'first'} aria-pressed={retakeMode === 'first'} on:click={() => changeRetakeMode('first')}>1 пересдача</button><button type="button" class:active={retakeMode === 'commission'} aria-pressed={retakeMode === 'commission'} on:click={() => changeRetakeMode('commission')}>Комиссионная пересдача</button></div></div>{/if}
 
@@ -1038,12 +1323,12 @@
             {#if page === 'meetings'}
               <div class="field-block"><div class="field-head"><label>Преподаватели</label><span>01</span></div>
                 <SearchField type="person" placeholder="Добавить преподавателя" onPick={addMeetingTeacher} />
-                {#if meetingTeachers.length}<div class="group-chips">{#each meetingTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeMeetingTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}>×</button></span>{/each}</div>{/if}
+                {#if meetingTeachers.length}<div class="group-chips">{#each meetingTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeMeetingTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}><AppIcon name="close" size={16} /></button></span>{/each}</div>{/if}
                 {#if meetingError}<p class="form-error">{meetingError}</p>{:else}<p class="field-hint">Можно добавить любое количество преподавателей.</p>{/if}
               </div>
             {:else}<div class="field-block"><div class="field-head"><label>{uiPage === 'substitutions' ? 'Кого нужно заменить' : 'Преподаватель'}</label><span>01</span></div>
               {#if teacher}
-                <div class="chosen-person"><span class="avatar">{teacher.label.slice(0, 1)}</span><span><strong>{teacher.label}</strong><small>Преподаватель выбран</small></span><button type="button" on:click={removeTeacher} aria-label="Удалить преподавателя">×</button></div>
+                <div class="chosen-person"><span class="avatar">{teacher.label.slice(0, 1)}</span><span><strong>{teacher.label}</strong><small>Преподаватель выбран</small></span><button type="button" on:click={removeTeacher} aria-label="Удалить преподавателя"><AppIcon name="close" size={16} /></button></div>
               {:else}
                 <SearchField type="person" placeholder="Начните вводить ФИО" onPick={chooseTeacher} />
                 <p class="field-hint">Подсказки появятся после 4 символов</p>
@@ -1055,7 +1340,7 @@
                 <div class="commission-choice" role="group" aria-label={uiPage === 'substitutions' ? 'Способ выбора замещающих преподавателей' : 'Способ выбора комиссии'}><button type="button" class:active={commissionChoice === 'people'} aria-pressed={commissionChoice === 'people'} on:click={() => changeCommissionChoice('people')}>Конкретные люди</button><button type="button" class:active={commissionChoice === 'group'} aria-pressed={commissionChoice === 'group'} on:click={() => changeCommissionChoice('group')}>Тематическая группа</button></div>
                 {#if commissionChoice === 'people'}
                   {#if uiPage === 'substitutions' || commissionTeachers.length < 2}<SearchField type="person" placeholder="Добавить преподавателя" onPick={addCommissionTeacher} />{/if}
-                  {#if commissionTeachers.length}<div class="group-chips">{#each commissionTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeCommissionTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}>×</button></span>{/each}</div>{/if}
+                  {#if commissionTeachers.length}<div class="group-chips">{#each commissionTeachers as person (person.id)}<span class="group-chip">{person.label}<button type="button" on:click={() => removeCommissionTeacher(person.id)} aria-label={`Удалить преподавателя ${person.label}`}><AppIcon name="close" size={16} /></button></span>{/each}</div>{/if}
                   {#if committeeError}<p class="form-error">{committeeError}</p>{:else}<p class="field-hint">{uiPage === 'substitutions' ? 'Можно добавить любое количество преподавателей.' : 'Добавьте одного или двух преподавателей.'}</p>{/if}
                 {:else}
                   <CustomSelect
@@ -1076,7 +1361,7 @@
 
             {#if uiPage !== 'substitutions' && page !== 'meetings'}<div class="field-block"><div class="field-head"><label>Учебные группы</label><span>{groupsStepNumber}</span></div>
               <SearchField type="group" placeholder="Например, М-251" onPick={addGroup} />
-              {#if groups.length}<div class="group-chips">{#each groups as group (group.id)}<span class="group-chip">{group.label}<button type="button" on:click={() => removeGroup(group.id)} aria-label={`Удалить группу ${group.label}`}>×</button></span>{/each}</div>{:else}<p class="field-hint">Можно добавить любое количество групп</p>{/if}
+              {#if groups.length}<div class="group-chips">{#each groups as group (group.id)}<span class="group-chip">{group.label}<button type="button" on:click={() => removeGroup(group.id)} aria-label={`Удалить группу ${group.label}`}><AppIcon name="close" size={16} /></button></span>{/each}</div>{:else}<p class="field-hint">Можно добавить любое количество групп</p>{/if}
             </div>{/if}
 
             {#if uiPage !== 'substitutions' && page !== 'meetings'}
@@ -1091,7 +1376,7 @@
                   {#each auditoriums as aud (aud.id)}
                     <span class="group-chip aud-chip">
                       {aud.label}
-                      <button type="button" on:click={() => removeAuditorium(aud.id)} aria-label={`Удалить аудиторию ${aud.label}`}>×</button>
+                      <button type="button" on:click={() => removeAuditorium(aud.id)} aria-label={`Удалить аудиторию ${aud.label}`}><AppIcon name="close" size={16} /></button>
                     </span>
                   {/each}
                 </div>
@@ -1196,7 +1481,7 @@
                                 class:added={isAdded}
                                 on:click={() => isAdded ? removeAuditorium(String(aud.auditoriumOid)) : addAuditoriumFromItem(aud)}
                               >
-                                {isAdded ? '✓ ' : '+ '}{aud.name || aud.number}
+                                <AppIcon name={isAdded ? 'check' : 'plus'} size={14} /> {aud.name || aud.number}
                                 {#if aud.amount}<small>{aud.amount}м</small>{/if}
                               </button>
                             {/each}
@@ -1217,8 +1502,8 @@
 
             <div class="field-block date-block"><div class="field-head"><label>Период</label><span>{periodStepNumber}</span></div><div class="date-fields"><div><label for="start-date">С</label><input id="start-date" type="date" value={start} on:change={(event) => changeStart((event.currentTarget as HTMLInputElement).value)} /></div><div><label for="end-date">ПО</label><input id="end-date" type="date" min={start} value={finish} on:change={(event) => changeFinish((event.currentTarget as HTMLInputElement).value)} /></div></div></div>
             {#if start && finish && start > finish}<p class="form-error">Дата окончания раньше даты начала.</p>{/if}
-            <button class="primary-button generate-button" type="button" disabled={(page === 'meetings' ? !meetingTeachers.length : !teacher) || (page !== 'meetings' && uiPage !== 'substitutions' && !groups.length) || !start || !finish || start > finish || loading || ((uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && (commissionChoice === 'people' ? !commissionTeachers.length : !commissionGroupId))} on:click={generate}>{loading ? 'Загружаем расписание…' : uiPage === 'substitutions' ? 'Показать замены' : 'Показать свободное время'}<span aria-hidden="true">↗</span></button>
-            <div class="panel-note"><span>ⓘ</span><p>{uiPage === 'substitutions' ? 'Выбирайте занятия заменяемого преподавателя. Доступность коллег показана под каждой парой и не ограничивает выбор.' : page === 'meetings' ? 'Зелёные слоты свободны у всех выбранных преподавателей.' : 'Расписание загружается с сайта ОмГТУ. В таблице можно выбрать подходящие пары.'}</p></div>
+            <button class="primary-button generate-button" type="button" disabled={(page === 'meetings' ? !meetingTeachers.length : !teacher) || (page !== 'meetings' && uiPage !== 'substitutions' && !groups.length) || !start || !finish || start > finish || loading || ((uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && (commissionChoice === 'people' ? !commissionTeachers.length : !commissionGroupId))} on:click={generate}>{loading ? 'Загружаем расписание…' : uiPage === 'substitutions' ? 'Показать замены' : 'Показать свободное время'}<AppIcon name="arrow-up-right" size={18} /></button>
+            <div class="panel-note"><AppIcon name="info" size={18} /><p>{uiPage === 'substitutions' ? 'Выбирайте занятия заменяемого преподавателя. Доступность коллег показана под каждой парой и не ограничивает выбор.' : page === 'meetings' ? 'Зелёные слоты свободны у всех выбранных преподавателей.' : 'Расписание загружается с сайта ОмГТУ. В таблице можно выбрать подходящие пары.'}</p></div>
           </aside>
 
           <section class="results-panel" aria-live="polite">
@@ -1253,8 +1538,8 @@
                 {/if}
               </div>
             </div>
-            {#if error}<div class="state-card error-card"><span class="state-icon">!</span><h3>Не удалось получить расписание</h3><p>{error}</p><button type="button" on:click={generate}>Повторить запрос ↗</button></div>
-            {:else if loading}<div class="state-card"><span class="state-icon loading-icon">◷</span><h3>Сопоставляем расписания</h3><p>{uiPage === 'substitutions' ? 'Загружаем занятия и расписания возможных замещающих преподавателей.' : page === 'meetings' ? 'Загружаем расписания выбранных преподавателей.' : 'Загружаем основного преподавателя, группы и выбранный состав комиссии.'}</p></div>
+            {#if error}<div class="state-card error-card"><span class="state-icon"><AppIcon name="alert" size={30} /></span><h3>Не удалось получить расписание</h3><p>{error}</p><button type="button" on:click={generate}>Повторить запрос <AppIcon name="arrow-up-right" size={15} /></button></div>
+            {:else if loading}<div class="state-card"><span class="state-icon loading-icon"><AppIcon name="clock" size={30} /></span><h3>Сопоставляем расписания</h3><p>{uiPage === 'substitutions' ? 'Загружаем занятия и расписания возможных замещающих преподавателей.' : page === 'meetings' ? 'Загружаем расписания выбранных преподавателей.' : 'Загружаем основного преподавателя, группы и выбранный состав комиссии.'}</p></div>
             {:else if !hasGenerated}<div class="state-card empty-card"><div class="empty-illustration"><span>01</span><span>02</span><span>03</span><span>04</span></div><h3>{uiPage === 'substitutions' ? 'Здесь появятся занятия' : 'Здесь появятся свободные окна'}</h3><p>{uiPage === 'substitutions' ? 'Выберите преподавателя, которого нужно заменить, укажите возможных заменяющих и период. Мы покажем его занятия и доступность коллег.' : page === 'meetings' ? 'Добавьте преподавателей и укажите даты. Мы покажем пары, свободные у всех выбранных.' : `Выберите преподавателя, добавьте группы и укажите даты.${page === 'retakes' && retakeMode === 'commission' ? ' Для комиссии укажите людей или тематическую группу.' : ''} Мы покажем общие свободные пары по неделям.`}</p></div>
             {:else}
               <div class="legend">
@@ -1297,12 +1582,12 @@
                     {#each week.rows as row, rowIndex}<div class="table-row" role="row"><div class="slot-label" role="rowheader"><strong>{String(row.slot.number).padStart(2, '0')}</strong><span>{row.slot.start}<br />{row.slot.end}</span></div>
                       {#each row.cells as cell, day}{@const dStatus = week.daysStatus ? week.daysStatus[day] : null}<div role="cell" class="cell-wrap" class:today-column={cell.date === currentDateIso} class:col-teacher-free={displayMode === 'windows' && dStatus && dStatus.teacherFreeDay && !dStatus.bothFreeDay} class:col-group-free={displayMode === 'windows' && dStatus && dStatus.groupFreeDay && !dStatus.bothFreeDay} class:col-both-free={displayMode === 'windows' && dStatus && dStatus.bothFreeDay} class:col-last-row={displayMode === 'windows' && rowIndex === week.rows.length - 1}><button type="button" class="slot-cell" class:mode-classic={displayMode === 'classic'} class:is-free={cell.available} class:is-selected={selected.has(cell.key)} class:no-lessons-today={displayMode === 'windows' && cellHasNoLessonsToday(cell)} class:window-none={displayMode === 'windows' && cell.available && cell.windowStatus === 'none'} class:window-group={displayMode === 'windows' && cell.available && cell.windowStatus === 'group-window'} class:window-teacher={displayMode === 'windows' && cell.available && cell.windowStatus === 'teacher-window'} class:window-both={displayMode === 'windows' && cell.available && cell.windowStatus === 'both-window'} class:show-candidates={(uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)} disabled={!cell.available} aria-pressed={cell.available ? selected.has(cell.key) : undefined} aria-label={cellAriaLabel(cell, row.slot)} on:mouseenter={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:mouseleave={hideTooltip} on:focus={(e) => { if (displayMode === 'windows') showTooltip(cell, row.slot, e); }} on:blur={hideTooltip} on:click={() => toggle(cell)}>
                         {#if selected.has(cell.key) && slotAssignedAuditoriums.has(cell.key)}<span class="cell-assigned-aud-chip">Ауд. {slotAssignedAuditoriums.get(cell.key)?.name}</span>{/if}
-                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={`${t.person.label}${t.hasWindow ? `: Окно (${formatPairCount(t.windowPairs)})` : ''}`}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow && !detail.noLessonsToday} class:chip-group-window={!detail.busy && detail.hasWindow && !detail.noLessonsToday} class:chip-group-no-lessons={detail.noLessonsToday} class:chip-busy={detail.busy} title={`${detail.group.label}: ${detail.noLessonsToday ? 'нет пар сегодня' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : detail.busy ? 'занята' : 'без окон'}`}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else if cell.groupsDetails.length === 1 && cell.groupsDetails[0].noLessonsToday}<div class="cell-chips-wrap"><span class="mini-chip chip-group-no-lessons" title={`${cell.groupsDetails[0].group.label}: нет пар сегодня`}><span class="mini-chip-label">{cell.groupsDetails[0].group.label}</span></span></div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag" class:tag-no-lessons={cellHasNoLessonsToday(cell)} class:tag-none={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'none'} class:tag-group-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'group-window'} class:tag-teacher-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'teacher-window'} class:tag-both-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'both-window'}>{cellHasNoLessonsToday(cell) ? 'Нет пар сегодня' : windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check">{selected.has(cell.key) ? '✓' : '+'}</span>{/if}{/if}
+                        {#if cell.outOfRange}<span class="cell-muted">Вне периода</span>{:else if displayMode === 'classic'}{#if page === 'meetings'}{#if cell.available}<span class="cell-group-list">Свободны все</span><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{:else}<span class="cell-muted">Занято</span>{/if}{:else if uiPage === 'substitutions'}{#if cell.teacherBusy}<span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{:else}<span class="cell-muted">Нет занятия</span>{/if}{:else if cell.teacherBusy}<span class="cell-muted">Занято</span>{:else if !cell.freeGroups.length}<span class="cell-muted">Нет групп</span>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{/if}{:else}{#if !cell.available}<span class="cell-muted cell-unavailable-reason">{cell.unavailableText ?? 'Занято'}</span>{:else if page === 'meetings'}<div class="cell-free-body">{#if cell.teachersDetails && cell.teachersDetails.length > 0}<div class="cell-chips-wrap">{#each cell.teachersDetails as t}<span class="mini-chip" class:chip-free={t.available && !t.hasWindow} class:chip-teacher-window={t.available && t.hasWindow} class:chip-no-lessons={t.noLessons} class:chip-busy={!t.available && !t.noLessons} title={`${t.person.label}${t.hasWindow ? `: Окно (${formatPairCount(t.windowPairs)})` : ''}`}><span class="mini-chip-label">{t.person.label.split(' ')[0]}</span></span>{/each}</div>{:else}<span class="cell-group-list">Свободно</span>{/if}<span class="cell-status-tag tag-{cell.windowStatus}">{windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{:else if uiPage === 'substitutions'}<div class="cell-free-body"><span class="cell-group-list lesson-summary">{cell.lessons.join('; ')}</span></div><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{:else}<div class="cell-free-body">{#if cell.groupsDetails && cell.groupsDetails.length > 1}<div class="cell-chips-wrap">{#each cell.groupsDetails as detail}<span class="mini-chip" class:chip-free={!detail.busy && !detail.hasWindow && !detail.noLessonsToday} class:chip-group-window={!detail.busy && detail.hasWindow && !detail.noLessonsToday} class:chip-group-no-lessons={detail.noLessonsToday} class:chip-busy={detail.busy} title={`${detail.group.label}: ${detail.noLessonsToday ? 'нет пар сегодня' : detail.hasWindow ? `Окно (${formatPairCount(detail.windowPairs)})` : detail.busy ? 'занята' : 'без окон'}`}><span class="mini-chip-label">{detail.group.label}</span></span>{/each}</div>{:else if cell.groupsDetails.length === 1 && cell.groupsDetails[0].noLessonsToday}<div class="cell-chips-wrap"><span class="mini-chip chip-group-no-lessons" title={`${cell.groupsDetails[0].group.label}: нет пар сегодня`}><span class="mini-chip-label">{cell.groupsDetails[0].group.label}</span></span></div>{:else}<span class="cell-group-list">{cell.freeGroups.map((group) => group.label).join(', ')}</span>{/if}<span class="cell-status-tag" class:tag-no-lessons={cellHasNoLessonsToday(cell)} class:tag-none={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'none'} class:tag-group-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'group-window'} class:tag-teacher-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'teacher-window'} class:tag-both-window={!cellHasNoLessonsToday(cell) && cell.windowStatus === 'both-window'}>{cellHasNoLessonsToday(cell) ? 'Нет пар сегодня' : windowStatusShort(cell.windowStatus, cell.windowPairs)}</span></div><span class="cell-check"><AppIcon name={selected.has(cell.key) ? 'check' : 'plus'} size={15} /></span>{/if}{/if}
                         {#if (uiPage === 'substitutions' || (page === 'retakes' && retakeMode === 'commission')) && commissionChoice === 'group' && selected.has(cell.key)}<span class="selected-commission-names"><span class="candidate-list-label">{uiPage === 'substitutions' ? 'Могут заменить:' : 'Комиссия:'}</span>{#if freeCommission(cell).length}{#each freeCommission(cell) as name}<span class="candidate-name">{name}</span>{/each}{:else}<span class="candidate-name">Никого из группы</span>{/if}</span>{/if}
                       </button>
                       {#if (uiPage === 'substitutions' ? cell.teacherBusy : page === 'retakes' && retakeMode === 'commission' && !cell.outOfRange)}<div class="commission-strip">
                         {#if commissionChoice === 'people'}
-                          {#each cell.commission as entry, number}<span class="commission-person-indicator" class:can-attend={entry.available} class:no-lessons={entry.reason === 'no-lessons'} class:load-error={entry.reason === 'load-error'} title={`${entry.person.label}: ${commissionReason(entry.reason)}`} aria-label={`Преподаватель ${number + 1}, ${entry.person.label}: ${commissionReason(entry.reason)}`}>{number + 1} {entry.available ? '✓' : '×'}</span>{/each}
+                          {#each cell.commission as entry, number}<span class="commission-person-indicator" class:can-attend={entry.available} class:no-lessons={entry.reason === 'no-lessons'} class:load-error={entry.reason === 'load-error'} title={`${entry.person.label}: ${commissionReason(entry.reason)}`} aria-label={`Преподаватель ${number + 1}, ${entry.person.label}: ${commissionReason(entry.reason)}`}>{number + 1} <AppIcon name={entry.available ? 'check' : 'close'} size={12} /></span>{/each}
                         {:else}
                           <span class="commission-count" title={freeCommission(cell).length ? freeCommission(cell).join('\n') : 'Нет доступных преподавателей'} aria-label={`${freeCommission(cell).length} из ${cell.commission.length} преподавателей ${uiPage === 'substitutions' ? 'могут заменить' : 'комиссии могут присутствовать'}`}>{freeCommission(cell).length} из {cell.commission.length} могут</span>
                         {/if}
@@ -1331,14 +1616,19 @@
               <small>{selectedCount ? `В ${new Set(selectedDetails.map((item) => item.cell.date)).size} дн. · Посмотреть` : uiPage === 'substitutions' ? 'Нажмите на занятие' : 'Нажмите на свободную пару'}</small>
             </span>
             {#if selectedCount}
-              <span class="selection-arrow-icon">↗</span>
+              <span class="selection-arrow-icon"><AppIcon name="arrow-up-right" size={18} /></span>
             {/if}
           </button>
+          {#if isPlanningPage()}
+            <span class="plan-save-state state-{planSaveState}" title={planSaveMessage || (planSaveState === 'saved' ? 'Черновик хранится в аккаунте и будет доступен после входа' : '')} role="status">
+              <i></i>{planSaveState === 'loading' ? 'Загружаем план' : planSaveState === 'saving' ? 'Сохраняем' : planSaveState === 'error' ? 'Не сохранено' : 'Сохранено в аккаунте'}
+            </span>
+          {/if}
           {#if selectedCount && page !== 'meetings'}
             <div class="selection-actions">
               <button type="button" class="btn-aud-finder" on:click={() => openAuditoriumModal('all')}>
                 <span>Подобрать аудиторию</span>
-                <span class="btn-arrow">↗</span>
+                <span class="btn-arrow"><AppIcon name="arrow-up-right" size={18} /></span>
               </button>
               <button type="button" class="btn-clear-selection" on:click={clearSelection}>Очистить</button>
             </div>
@@ -1355,8 +1645,8 @@
               </div>
               <div class="viewer-stream-controls">
                 <div class="commission-choice" role="group" aria-label="Выбор групп">
-                  <button type="button" class:active={viewerGroupMode === 'all'} aria-pressed={viewerGroupMode === 'all'} on:click={() => { viewerGroupMode = 'all'; if (viewerHasGenerated) void generateScheduleView(); }}>Все группы</button>
-                  <button type="button" class:active={viewerGroupMode === 'selected'} aria-pressed={viewerGroupMode === 'selected'} on:click={() => { viewerGroupMode = 'selected'; if (viewerHasGenerated) void generateScheduleView(); }}>Выбрать группы</button>
+                  <button type="button" class:active={viewerGroupMode === 'all'} aria-pressed={viewerGroupMode === 'all'} on:click={() => { viewerGroupMode = 'all'; queueViewerSchedule(); }}>Все группы</button>
+                  <button type="button" class:active={viewerGroupMode === 'selected'} aria-pressed={viewerGroupMode === 'selected'} on:click={() => { viewerGroupMode = 'selected'; queueViewerSchedule(); }}>Выбрать группы</button>
                 </div>
               </div>
               <div class="viewer-add-group">
@@ -1388,19 +1678,11 @@
               {/if}
             </div>
 
-            <div class="sub-filter viewer-date-filter viewer-start-filter"><label for="viewer-start-date">Период с</label><input id="viewer-start-date" type="date" bind:value={viewerStart} on:change={() => viewerHasGenerated ? void generateScheduleView() : void loadViewerDepartmentGroups()} /></div>
-            <div class="sub-filter viewer-date-filter viewer-end-filter"><label for="viewer-end-date">по</label><input id="viewer-end-date" type="date" min={viewerStart} bind:value={viewerFinish} on:change={() => viewerHasGenerated ? void generateScheduleView() : void loadViewerDepartmentGroups()} /></div>
+            <div class="sub-filter viewer-date-filter viewer-start-filter"><label for="viewer-start-date">Период с</label><input id="viewer-start-date" type="date" bind:value={viewerStart} on:change={() => queueViewerSchedule()} /></div>
+            <div class="sub-filter viewer-date-filter viewer-end-filter"><label for="viewer-end-date">по</label><input id="viewer-end-date" type="date" min={viewerStart} bind:value={viewerFinish} on:change={() => queueViewerSchedule()} /></div>
             {#if viewerStart && viewerFinish && viewerStart > viewerFinish}
               <p class="form-error">Дата окончания раньше даты начала.</p>
             {/if}
-
-            <button
-              class="primary-button generate-button"
-              class:viewer-generate-button={viewerGroupMode === 'selected'}
-              type="button"
-              disabled={viewerLoading || viewerGroupCatalogLoading || viewerScheduleEntities().length === 0 || viewerStart > viewerFinish}
-              on:click={generateScheduleView}
-            >{viewerLoading ? 'Загружаем расписание…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
 
           </PlannerFilterBar>
           <PlannerToolbar slot="toolbar" ariaLabel="Обозначения и настройки расписания">
@@ -1416,28 +1698,41 @@
               <label class:active={viewerShowAuditorium}><input type="checkbox" bind:checked={viewerShowAuditorium} /> Отображать аудиторию</label>
             </div>
           </PlannerToolbar>
-            {#if viewerError}
+            {#if viewerGroupCatalogError}
               <div class="state-card error-card">
-                <span class="state-icon">!</span>
+                <span class="state-icon"><AppIcon name="alert" size={30} /></span>
+                <h3>Не удалось загрузить список групп</h3>
+                <p>{viewerGroupCatalogError}</p>
+                <button type="button" on:click={() => { viewerGroupCatalogKey = ''; void loadViewerDepartmentGroups().then(generateScheduleView); }}>Повторить загрузку <AppIcon name="arrow-up-right" size={15} /></button>
+              </div>
+            {:else if viewerError}
+              <div class="state-card error-card">
+                <span class="state-icon"><AppIcon name="alert" size={30} /></span>
                 <h3>Не удалось получить расписание</h3>
                 <p>{viewerError}</p>
-                <button type="button" on:click={generateScheduleView}>Повторить запрос ↗</button>
+                <button type="button" on:click={generateScheduleView}>Повторить запрос <AppIcon name="arrow-up-right" size={15} /></button>
               </div>
             {:else if viewerGroupCatalogLoading}
               <div class="state-card">
-                <span class="state-icon loading-icon">◷</span>
+                <span class="state-icon loading-icon"><AppIcon name="clock" size={30} /></span>
                 <h3>Загружаем группы кафедры</h3>
                 <p>Загружаем список групп МО и ФИТ из расписания ОмГТУ.</p>
               </div>
-            {:else if viewerLoading}
+            {:else if viewerLoading && !viewerHasGenerated}
               <div class="state-card">
-                <span class="state-icon loading-icon">◷</span>
-                <h3>Сопоставляем расписания</h3>
-                <p>Загружаем расписания выбранных групп из расписания ОмГТУ...</p>
+                <span class="state-icon loading-icon"><AppIcon name="clock" size={30} /></span>
+                <h3>Загружаем расписание из кеша</h3>
+                <p>Если снимок устарел или ещё не создан, worker обновляет его постепенно.</p>
+              </div>
+            {:else if viewerLoading && viewerDisplayEntities.length === 0}
+              <div class="state-card">
+                <span class="state-icon loading-icon"><AppIcon name="clock" size={30} /></span>
+                <h3>Проверяем расписания групп</h3>
+                <p>Загружено {viewerLoadedEntities.length} из {viewerScheduleEntities().length}; группы с парами появятся по мере обновления кеша.</p>
               </div>
             {:else if viewerHasGenerated && viewerDisplayEntities.length === 0}
               <div class="state-card empty-card">
-                <span class="state-icon">◷</span>
+                <span class="state-icon"><AppIcon name="clock" size={30} /></span>
                 <h3>Нет групп с парами</h3>
                 <p>За выбранный период у выбранных групп занятий нет. Отключите фильтр, чтобы показать все группы.</p>
               </div>
@@ -1449,10 +1744,11 @@
                   <span>03</span>
                   <span>04</span>
                 </div>
-                <h3>Здесь появится расписание</h3>
-                <p>Расписание появится здесь после выбора групп и нажатия «Показать расписание».</p>
+                <h3>{viewerGroupMode === 'selected' && viewerSelectedGroupIds.size === 0 ? 'Выберите группы' : 'Здесь появится расписание'}</h3>
+                <p>{viewerGroupMode === 'selected' && viewerSelectedGroupIds.size === 0 ? 'Отметьте хотя бы одну группу в списке выше — её расписание загрузится автоматически.' : 'Расписание загрузится автоматически после выбора групп и периода.'}</p>
               </div>
             {:else}
+              {#if viewerLoading}<p class="aud-data-note" role="status">Расписания загружены для {viewerLoadedEntities.length} из {viewerScheduleEntities().length} групп. Остальные появляются по мере обновления кеша.</p>{/if}
               {#each viewerWeeks as week, index (week.monday)}
                 <div class="week-block">
                   <div class="week-title">
@@ -1514,6 +1810,7 @@
                                             <!-- svelte-ignore a11y-no-static-element-interactions -->
                                             <div
                                               class="viewer-lesson-line"
+                                              class:viewer-planned-lesson={Boolean(lesson.planKind)}
                                               tabindex="0"
                                               role="button"
                                               on:mouseenter={(e) => showViewerTooltip(lesson, lane.entity, row.slot, cell.date, e)}
@@ -1523,6 +1820,9 @@
                                             >
                                               {#if viewerShowSubject && lesson.kindOfWork}
                                                 <span class="viewer-kind-prefix">{formatLessonKindShort(lesson.kindOfWork)}</span>
+                                              {/if}
+                                              {#if lesson.planKind}
+                                                <span class="viewer-plan-badge">{lesson.planKind === 'substitution' ? 'Замена' : lesson.planKind === 'consultation' ? 'Консультация' : lesson.planKind === 'retake' ? 'Пересдача' : 'Встреча'} · {lesson.planStatus === 'confirmed' ? 'подтверждено' : 'выбрано'}</span>
                                               {/if}
                                               {#if viewerShowSubject}<strong class="viewer-lesson-title" title={lesson.discipline}>{lesson.discipline}</strong>{/if}
                                               <span class="viewer-lesson-details">
@@ -1832,6 +2132,7 @@
             {#if lesson}
               <div class="entity-head">
                 <strong class="entity-title">{lesson.discipline}</strong>
+                {#if lesson.planKind}<span class="entity-badge">{lesson.planKind === 'substitution' ? 'Замена' : lesson.planKind === 'consultation' ? 'Консультация' : lesson.planKind === 'retake' ? 'Пересдача' : 'Встреча'} · {lesson.planStatus === 'confirmed' ? 'подтверждено' : 'выбрано'}</span>{/if}
                 {#if lesson.kindOfWork}
                   <span class="entity-badge">{lesson.kindOfWork}</span>
                 {/if}
@@ -1900,7 +2201,7 @@
               {/if}
             </p>
           </div>
-          <button type="button" class="modal-close-button" on:click={closeAuditoriumModal} aria-label="Закрыть">✕</button>
+          <button type="button" class="modal-close-button" on:click={closeAuditoriumModal} aria-label="Закрыть"><AppIcon name="close" size={18} /></button>
         </div>
 
         {#if selectedDetails.length > 1}
@@ -2052,9 +2353,9 @@
                   <div class="modal-aud-bottom">
                     <span class="aud-free-badge">Свободна</span>
                     {#if isAlreadyAdded}
-                      <button type="button" class="btn-aud-pick added" on:click={() => removeAuditorium(String(aud.auditoriumOid))}>Добавлена ×</button>
+                      <button type="button" class="btn-aud-pick added" on:click={() => removeAuditorium(String(aud.auditoriumOid))}>Добавлена <AppIcon name="close" size={15} /></button>
                     {:else}
-                      <button type="button" class="btn-aud-pick" on:click={() => pickAuditoriumFromModal(aud)}>Выбрать ↗</button>
+                      <button type="button" class="btn-aud-pick" on:click={() => pickAuditoriumFromModal(aud)}>Выбрать <AppIcon name="arrow-up-right" size={15} /></button>
                     {/if}
                   </div>
                 </div>
@@ -2084,7 +2385,7 @@
               Всего выбрано: <strong>{selectedCount}</strong> {selectedCount === 1 ? 'пара' : selectedCount < 5 ? 'пары' : 'пар'} в <strong>{new Set(selectedDetails.map((item) => item.cell.date)).size}</strong> {new Set(selectedDetails.map((item) => item.cell.date)).size === 1 ? 'дне' : 'днях'}
             </p>
           </div>
-          <button type="button" class="modal-close-button" on:click={closeSelectedSlotsModal} aria-label="Закрыть">✕</button>
+          <button type="button" class="modal-close-button" on:click={closeSelectedSlotsModal} aria-label="Закрыть"><AppIcon name="close" size={18} /></button>
         </div>
 
         <div class="selected-modal-body">
@@ -2131,7 +2432,7 @@
                               on:click|stopPropagation={() => removeSlotAssignedAud(item.cell.key)}
                               title="Убрать аудиторию с этой пары"
                               aria-label="Убрать аудиторию"
-                            >×</button>
+                            ><AppIcon name="close" size={16} /></button>
                           </span>
                         {:else if item.cell.freeAuditoriums && item.cell.freeAuditoriums.length > 0}
                           <span class="slot-badge slot-badge-aud auto-free">
@@ -2150,7 +2451,7 @@
                       on:click={() => findAuditoriumForSlot(item.cell.key)}
                       title="Подобрать аудиторию на эту пару"
                     >
-                      {slotAssignedAuditoriums.has(item.cell.key) ? 'Сменить аудиторию ↗' : 'Подобрать аудиторию ↗'}
+                      {slotAssignedAuditoriums.has(item.cell.key) ? 'Сменить аудиторию' : 'Подобрать аудиторию'} <AppIcon name="arrow-up-right" size={15} />
                     </button>
                     <button
                       type="button"
@@ -2159,7 +2460,7 @@
                       aria-label="Удалить пару из выбранных"
                       title="Убрать"
                     >
-                      ✕
+                      <AppIcon name="close" size={16} />
                     </button>
                   </div>
                 </div>
@@ -2172,7 +2473,7 @@
           <button type="button" class="btn-clear-all" on:click={clearSelection}>Очистить всё</button>
           <div class="selected-footer-right">
             <button type="button" class="btn-modal-aud-all" on:click={() => findAuditoriumForSlot('all')}>
-              Подобрать на все пары ↗
+              Подобрать на все пары <AppIcon name="arrow-up-right" size={15} />
             </button>
             <button type="button" class="btn-modal-done" on:click={closeSelectedSlotsModal}>Готово</button>
           </div>

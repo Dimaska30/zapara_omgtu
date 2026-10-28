@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AppIcon from './AppIcon.svelte';
   import { createEventDispatcher, onMount, onDestroy, tick } from 'svelte';
 
   export let value: any = null;
@@ -139,7 +140,7 @@
                 <span class="option-extra">{opt.extra}</span>
               {/if}
               {#if isSelected}
-                <span class="option-check" aria-hidden="true">✓</span>
+                <span class="option-check"><AppIcon name="check" size={16} /></span>
               {/if}
             </li>
           {/each}

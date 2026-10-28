@@ -17,6 +17,7 @@ from app.plans import router as plans_router
 from app.notifications import router as notifications_router
 from app.dictionaries import router as dictionaries_router
 from app.schedule import router as schedule_router
+from app.public_data import router as public_data_router
 
 
 @asynccontextmanager
@@ -32,6 +33,7 @@ app.include_router(plans_router)
 app.include_router(notifications_router)
 app.include_router(schedule_router)
 app.include_router(dictionaries_router)
+app.include_router(public_data_router)
 
 
 @app.get("/health/live", tags=["health"])

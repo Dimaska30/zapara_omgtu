@@ -128,7 +128,7 @@ export const SLOTS: Slot[] = [
   { number: 8, start: '20:10', end: '21:40' }
 ];
 
-const API = '/api';
+const API = '/backend-api/public';
 const militaryWords = ['военн', 'военная кафедра', 'военный учебный центр', 'вуц'];
 const datePattern = /(?<!\d)(\d{4}[.-]\d{2}[.-]\d{2}|\d{2}[.-]\d{2}[.-]\d{4})(?!\d)/;
 const timePattern = /(?<!\d)([01]?\d|2[0-3]):([0-5]\d)(?::[0-5]\d)?(?!\d)/;
@@ -166,24 +166,61 @@ async function getJson(path: string, signal?: AbortSignal): Promise<ApiItem[]> {
   }
 }
 
+const publicDictionaryCache = new Map<string, ApiItem[]>();
+async function getPublicDictionary(kind: 'groups' | 'lecturers' | 'buildings' | 'auditoriums', signal?: AbortSignal, buildingOid?: number, chairOid?: number): Promise<ApiItem[]> {
+  const key = `${kind}:${buildingOid ?? ''}:${chairOid ?? ''}`;
+  const cached = publicDictionaryCache.get(key);
+  if (cached) return cached;
+  for (let attempt = 0; attempt < 150; attempt++) {
+    const params = new URLSearchParams();
+    if (buildingOid) params.set('buildingOid', String(buildingOid));
+    if (chairOid) params.set('chairOid', String(chairOid));
+    const query = params.size ? `?${params}` : '';
+    const items = await getJson(`/dictionaries/${kind}${query}`, signal);
+    if (items.length) {
+      publicDictionaryCache.set(key, items);
+      return items;
+    }
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    await new Promise((resolve) => window.setTimeout(resolve, 2000));
+  }
+  throw new Error(`Серверный кеш справочника «${kind}» пока пуст. Worker продолжает загрузку; попробуйте позже.`);
+}
+
 export async function search(term: string, type: 'person' | 'group' | 'auditorium', signal?: AbortSignal): Promise<SearchItem[]> {
-  const params = new URLSearchParams({ term, type });
-  const data = await getJson(`/search?${params}`, signal);
+  const kind = type === 'person' ? 'lecturers' : type === 'group' ? 'groups' : 'auditoriums';
+  const data = await getPublicDictionary(kind, signal);
+  const needle = term.trim().toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
   return data.flatMap((item) => {
-    const id = item.id ?? item.oid ?? item.OID;
+    const id = type === 'person'
+      ? item.person ?? item.personOid ?? item.person_id
+      : type === 'group'
+        ? item.groupOid ?? item.id ?? item.oid
+        : item.auditoriumOid ?? item.id ?? item.oid;
     if (id === undefined || id === null || id === '') return [];
-    return [{
-      id: String(id),
-      label: String(item.label ?? item.name ?? item.title ?? item.description ?? id),
-      description: String(item.description ?? '')
-    }];
-  });
+    const label = String(type === 'person'
+      ? item.shortFIO ?? item.fio ?? item.name ?? ''
+      : item.name ?? item.number ?? item.label ?? '').trim();
+    if (!label) return [];
+    const description = String(type === 'person'
+      ? item.chair ?? ''
+      : type === 'group'
+        ? [item.faculty, item.formOfEducation].filter(Boolean).join(' | ')
+        : [item.typeOfAuditorium, item.building].filter(Boolean).join(' · '));
+    const searchable = `${label} ${description}`.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е');
+    if (!searchable.includes(needle)) return [];
+    return [{ id: String(id), label, description }];
+  }).sort((a, b) => {
+    const aExact = a.label.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').startsWith(needle) ? 0 : 1;
+    const bExact = b.label.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').startsWith(needle) ? 0 : 1;
+    return aExact - bExact || a.label.localeCompare(b.label, 'ru-RU');
+  }).slice(0, 20);
 }
 
 let cachedGroupCatalog: Group[] | null = null;
 export async function getGroupCatalog(signal?: AbortSignal): Promise<Group[]> {
   if (cachedGroupCatalog) return cachedGroupCatalog;
-  const items = await getJson('/dictionary/groups', signal);
+  const items = await getPublicDictionary('groups', signal);
   cachedGroupCatalog = items.flatMap((item) => {
     const id = item.groupOid ?? item.id ?? item.oid;
     const label = String(item.name ?? item.number ?? '').trim();
@@ -198,42 +235,64 @@ export async function getGroupCatalog(signal?: AbortSignal): Promise<Group[]> {
 }
 
 const departmentTeacherCache = new Map<string, SearchItem[]>();
-function normalizePersonLabel(value: string) {
-  return value.toLocaleLowerCase('ru-RU').replace(/ё/g, 'е').replace(/[\s.]+/g, '');
-}
-
 export async function searchDepartmentTeachers(department: string, signal?: AbortSignal): Promise<SearchItem[]> {
   const normalizedDepartment = department.trim().toLocaleLowerCase('ru-RU');
   const cached = departmentTeacherCache.get(normalizedDepartment);
   if (cached) return cached;
-
-  const lecturerDirectory = await getJson('/dictionary/lecturers', signal);
-  const roster = [...new Set(lecturerDirectory.flatMap((item) => {
-    const chair = String(item.chair ?? '').toLocaleLowerCase('ru-RU');
-    const label = String(item.shortFIO ?? item.fio ?? '').trim();
-    return chair.includes(normalizedDepartment) && label && !/^вакансия(?:[\s_]|$)/iu.test(label) ? [label] : [];
-  }))];
-  const found: SearchItem[] = [];
-  for (let offset = 0; offset < roster.length; offset += 8) {
-    const batch = roster.slice(offset, offset + 8);
-    const results = await Promise.all(batch.map((label) => search(label, 'person', signal)));
-    results.forEach((people, index) => {
-      const expectedLabel = normalizePersonLabel(batch[index]);
-      for (const person of people) {
-        if (normalizePersonLabel(person.label) !== expectedLabel) continue;
-        if (!person.description.toLocaleLowerCase('ru-RU').includes(normalizedDepartment)) continue;
-        found.push(person);
-      }
-    });
-  }
-  const unique = [...new Map(found.map((person) => [person.id, person] as const)).values()];
+  const normalizedDepartmentText = normalizedDepartment.replace(/[^а-яё]/giu, '').replace(/ё/giu, 'е');
+  if (!normalizedDepartmentText.includes('прикладнаяматематика') && !normalizedDepartmentText.includes('пмфи')) return [];
+  const roster = await getPublicDictionary('lecturers', signal, undefined, 46);
+  const unique = [...new Map(roster.flatMap((item) => {
+    const id = String(item.person ?? '').trim();
+    const label = String(item.schedule_name ?? item.shortFIO ?? item.fio ?? '').trim();
+    if (!/^\d{1,20}$/.test(id) || !label || /^вакансия(?:[\s_]|$)/iu.test(label)) return [];
+    const role = String(item.position ?? '').trim();
+    return [[id, { id, label, description: role || 'Состав кафедры ПМФИ' }] as const];
+  })).values()];
   departmentTeacherCache.set(normalizedDepartment, unique);
   return unique;
 }
 
-export async function getSchedule(type: 'person' | 'group' | 'auditorium', id: string, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
-  const params = new URLSearchParams({ start, finish, lng: '1' });
-  return getJson(`/schedule/${type}/${encodeURIComponent(id)}?${params}`, signal);
+export async function getSchedule(type: 'person' | 'group' | 'auditorium' | 'building', id: string, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
+  const params = new URLSearchParams({ start, finish, include_events: 'false' });
+  const path = `/schedule/${type}/${encodeURIComponent(id)}`;
+  let delay = 2000;
+  for (let attempt = 0; attempt < 120; attempt++) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+    const status = await fetch(`${API}${path}?${params}`, { signal });
+    if (!status.ok) throw new Error(`Серверный кеш расписания вернул ошибку ${status.status}.`);
+    const info = await status.json() as { complete?: boolean; coverage?: { state?: string }[] };
+    const staleAvailable = info.coverage?.some((window) => window.state === 'stale');
+    if (info.complete || staleAvailable) {
+      params.set('include_events', 'true');
+      const result = await fetch(`${API}${path}?${params}`, { signal });
+      if (!result.ok) throw new Error(`Серверный кеш расписания вернул ошибку ${result.status}.`);
+      const payload = await result.json() as { events?: ApiItem[] };
+      return payload.events ?? [];
+    }
+    await new Promise((resolve) => window.setTimeout(resolve, delay));
+    delay = Math.min(delay * 1.5, 30_000);
+  }
+  throw new Error('Серверный кеш ещё загружает это расписание. Worker обновляет данные постепенно; попробуйте позже.');
+}
+
+/** Calendar-safe, shared planning entries from the backend database. */
+export async function getPlannedEvents(start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
+  const response = await fetch(`${API}/planned-events?${new URLSearchParams({ start, finish })}`, { signal });
+  if (!response.ok) throw new Error(`Не удалось загрузить общие планы (${response.status}).`);
+  const payload = await response.json() as { events?: ApiItem[] };
+  return payload.events ?? [];
+}
+
+export function mergePlannedEvents(events: ApiItem[], planned: ApiItem[], type: 'person' | 'group' | 'auditorium', id: string): ApiItem[] {
+  const additions = planned.filter((event) => event.target_kind === type && String(event.target_id) === id);
+  if (!additions.length) return events;
+  const replacedLessons = new Set(additions.map((event) => event.source_lesson_oid).filter(Boolean).map(String));
+  const existingPlanEvents = new Set(events.map((event) => event.plan_event_id).filter(Boolean).map(String));
+  return [
+    ...events.filter((event) => !replacedLessons.has(String(event.lessonOid ?? event.lessonId ?? event.id ?? ''))),
+    ...additions.filter((event) => !existingPlanEvents.has(String(event.plan_event_id ?? '')))
+  ];
 }
 
 export const DEFAULT_BUILDINGS: Building[] = [
@@ -260,7 +319,7 @@ let cachedBuildings: Building[] | null = null;
 export async function getBuildings(signal?: AbortSignal): Promise<Building[]> {
   if (cachedBuildings) return cachedBuildings;
   try {
-    const items = await getJson('/dictionary/buildings', signal);
+    const items = await getPublicDictionary('buildings', signal);
     const result = items.map((b) => ({
       buildingOid: Number(b.buildingOid),
       name: String(b.name ?? b.abbr ?? 'Корпус'),
@@ -294,7 +353,7 @@ export async function getAuditoriums(buildingOid?: number, signal?: AbortSignal)
   }
 
   const query = buildingOid ? `?buildingOid=${encodeURIComponent(buildingOid)}` : '';
-  const items = await getJson(`/dictionary/auditoriums${query}`, signal);
+  const items = await getPublicDictionary('auditoriums', signal, buildingOid);
   const result = items.map((a) => ({
     auditoriumOid: Number(a.auditoriumOid),
     name: String(a.name ?? a.number ?? ''),
@@ -316,8 +375,7 @@ export async function getAuditoriums(buildingOid?: number, signal?: AbortSignal)
 }
 
 export async function getBuildingSchedule(buildingOid: number, start: string, finish: string, signal?: AbortSignal): Promise<ApiItem[]> {
-  const params = new URLSearchParams({ start, finish, lng: '1' });
-  return getJson(`/schedule/building/${encodeURIComponent(buildingOid)}?${params}`, signal);
+  return getSchedule('building', String(buildingOid), start, finish, signal);
 }
 
 export const AUDITORIUM_TYPE_CATEGORIES = [
@@ -863,6 +921,8 @@ export type ViewerLessonDetail = {
   subgroup?: string;
   timeStart?: string;
   timeEnd?: string;
+  planKind?: string;
+  planStatus?: string;
   rawEvent: ApiItem;
 };
 
@@ -938,6 +998,8 @@ export function buildViewerWeeks(
                 subgroup,
                 timeStart,
                 timeEnd,
+                planKind: event.plan_kind ? String(event.plan_kind) : undefined,
+                planStatus: event.plan_status ? String(event.plan_status) : undefined,
                 rawEvent: event
               };
             });

@@ -1,5 +1,8 @@
 <script lang="ts">
+  import AppIcon from './AppIcon.svelte';
   import { onMount } from 'svelte';
+  import { get } from 'svelte/store';
+  import { account } from './lib/account';
   import CustomSelect from './CustomSelect.svelte';
   import SearchField from './SearchField.svelte';
   import PlannerPageFrame from './PlannerPageFrame.svelte';
@@ -32,8 +35,10 @@
   type SlotReplacementPick = { replacement: SearchItem; date: string; slot: Slot; target: SelectedLesson | null };
   type Candidate = { person: SearchItem; status: Status | 'loading' | 'error'; windowPairs?: number; lessons?: ViewerLessonDetail[] };
   type HoverLesson = { lesson: ViewerLessonDetail; teacher: SearchItem; date: string; slot: Slot; targetRect: DOMRect };
-  type ConfirmedReplacement = { key: string; originalTeacher: SearchItem; replacement: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail };
-  const CONFIRMED_REPLACEMENTS_KEY = 'zapara-confirmed-substitutions-v1';
+  type ConfirmedReplacement = { key: string; planId: string; substitutionId: string; status: 'selected' | 'confirmed'; originalTeacher: SearchItem; replacement: SearchItem; date: string; slot: Slot; lesson: ViewerLessonDetail; issues?: { kind: string; lesson?: string; start?: string; end?: string }[]; conflictHash?: string; serverMessage?: string };
+  type PlanApiError = Error & { status?: number; detail?: unknown };
+  let confirmationReasons: Record<string, string> = {};
+  let savingReplacement = false;
 
   function mondayOf(date: Date) {
     const monday = new Date(date);
@@ -80,6 +85,8 @@
   let topicRequestId = 0;
   let notice = '';
   let rowStatusIndex = new Map<string, TeacherSlot>();
+  let boardRequestId = 0;
+  let refreshTimer: number | null = null;
   $: rowStatusIndex = indexRows(rows);
 
   function indexRows(items: BoardRow[]): Map<string, TeacherSlot> {
@@ -180,6 +187,9 @@
 
   async function refreshBoard() {
     if (!start || !finish || start > finish || !department.trim()) return;
+    const requestId = ++boardRequestId;
+    const requestedStart = start;
+    const requestedFinish = finish;
     loading = true;
     error = '';
     notice = '';
@@ -187,6 +197,7 @@
     try {
       const query = normalizedDepartment();
       const matching = await searchDepartmentTeachers(query);
+      if (requestId !== boardRequestId) return;
       if (!matching.length) {
         teachers = [];
         rows = [];
@@ -198,7 +209,8 @@
         return;
       }
       teachers = matching;
-      const loaded = await fetchSchedules(matching, start, finish);
+      const loaded = await fetchSchedules(matching, requestedStart, requestedFinish);
+      if (requestId !== boardRequestId) return;
       eventsByTeacher = loaded.events;
       failedTeacherIds = loaded.failed;
       const entities = matching.map((person) => ({ id: person.id, label: person.label, type: 'person' as const }));
@@ -206,10 +218,28 @@
       rows = makeRows(weeks, matching, failedTeacherIds);
       hasLoaded = true;
     } catch (cause) {
-      error = cause instanceof Error ? cause.message : 'Не удалось загрузить расписания преподавателей.';
+      if (requestId === boardRequestId) error = cause instanceof Error ? cause.message : 'Не удалось загрузить расписания преподавателей.';
     } finally {
-      loading = false;
+      if (requestId === boardRequestId) loading = false;
     }
+  }
+
+  function queueRefresh() {
+    boardRequestId++;
+    if (refreshTimer !== null) window.clearTimeout(refreshTimer);
+    selectedLesson = null;
+    slotReplacementPick = null;
+    pickedReplacement = null;
+    loading = false;
+    hasLoaded = false;
+    rows = [];
+    weeks = [];
+    eventsByTeacher = new Map();
+    failedTeacherIds = new Set();
+    refreshTimer = window.setTimeout(() => {
+      refreshTimer = null;
+      void refreshBoard();
+    }, 250);
   }
 
   function lessonTitle(lesson: ViewerLessonDetail) {
@@ -422,75 +452,220 @@
     notice = `${candidate.person.label} выбрано. Подтвердите замену кнопкой ниже.`;
   }
 
-  function persistConfirmedReplacements(items: ConfirmedReplacement[]) {
-    confirmedReplacements = items;
-    try { localStorage.setItem(CONFIRMED_REPLACEMENTS_KEY, JSON.stringify(items)); return true; }
-    catch { boardNotice = 'Не удалось сохранить список замен в этом браузере.'; return false; }
+  async function plansRequest(path: string, method = 'GET', body?: unknown) {
+    const session = get(account);
+    if (!session?.token || !session.departmentId) throw new Error('Войдите в аккаунт кафедры, чтобы сохранять замены.');
+    const response = await fetch(`/backend-api/plans${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${session.token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      ...(body ? { body: JSON.stringify(body) } : {})
+    });
+    if (!response.ok) {
+      let payload: any = {};
+      try { payload = await response.json(); } catch { /* The server may return an empty response. */ }
+      const err = new Error(typeof payload.detail === 'string' ? payload.detail : payload.detail?.message || `Ошибка API (${response.status})`) as PlanApiError;
+      err.status = response.status;
+      err.detail = payload.detail;
+      throw err;
+    }
+    return response.status === 204 ? null : response.json();
   }
 
-  function saveConfirmedReplacement() {
+  async function getSubstitutionPlan() {
+    const session = get(account);
+    if (!session?.departmentId) throw new Error('Войдите в аккаунт кафедры, чтобы сохранять замены.');
+    const plans = await plansRequest(`?department_id=${encodeURIComponent(session.departmentId)}`) as any[];
+    let plan = plans.find((item) => item.kind === 'substitution' && item.status === 'draft');
+    if (!plan) plan = await plansRequest('', 'POST', { department_id: session.departmentId, kind: 'substitution', title: 'Замены занятий' });
+    return plansRequest(`/${plan.id}`) as Promise<any>;
+  }
+
+  function replacementFromSnapshot(row: any): ConfirmedReplacement | null {
+    const snapshot = row.source_snapshot ?? {};
+    const lessonData = snapshot.lesson ?? {};
+    const teacherId = String(row.original_person_id ?? '');
+    const replacementId = String(row.substitute_person_id ?? '');
+    const date = String(row.event_date ?? '').slice(0, 10);
+    const startTime = String(row.starts_at ?? '').slice(0, 5);
+    const endTime = String(row.ends_at ?? '').slice(0, 5);
+    const slotNumber = Number(row.slot_number);
+    if (!teacherId || !replacementId || !date || !slotNumber) return null;
+    return {
+      key: String(snapshot.client_key ?? `${teacherId}:${date}:${slotNumber}:${row.substitution_id}`),
+      planId: String(row.plan_id),
+      substitutionId: String(row.substitution_id),
+      status: row.substitution_status === 'confirmed' ? 'confirmed' : 'selected',
+      originalTeacher: { id: teacherId, label: String(snapshot.original_label ?? teacherId), description: String(snapshot.original_description ?? '') },
+      replacement: { id: replacementId, label: String(snapshot.replacement_label ?? replacementId), description: String(snapshot.replacement_description ?? '') },
+      date,
+      slot: { number: slotNumber, start: startTime, end: endTime },
+      lesson: { discipline: String(lessonData.discipline ?? 'Занятие'), kindOfWork: lessonData.kindOfWork || undefined, auditorium: lessonData.auditorium || undefined, building: lessonData.building || undefined, group: lessonData.group || undefined, subgroup: lessonData.subgroup || undefined, lecturer: lessonData.lecturer || undefined, rawEvent: lessonData.rawEvent ?? {} }
+    };
+  }
+
+  async function loadConfirmedReplacements() {
+    const session = get(account);
+    if (!session?.departmentId || !session?.token) { confirmedReplacements = []; return; }
+    try {
+      const rows = await plansRequest(`/substitutions?department_id=${encodeURIComponent(session.departmentId)}`) as any[];
+      confirmedReplacements = rows.map(replacementFromSnapshot).filter((item): item is ConfirmedReplacement => Boolean(item));
+      boardNotice = '';
+    } catch (cause) {
+      boardNotice = cause instanceof Error ? `Не удалось загрузить общий список замен: ${cause.message}` : 'Не удалось загрузить общий список замен.';
+    }
+  }
+
+  function substitutionSnapshot(selection: SelectedLesson, replacement: SearchItem, key: string) {
+    const lesson = selection.lesson;
+    const rawEvent: ApiItem = {};
+    for (const field of ['lessonOid','discipline','kindOfWork','group','groupOid','groupId','group_id','subgroup','auditorium','auditoriumOid','building','lecturer','date','beginLesson','endLesson']) {
+      if (lesson.rawEvent[field] != null) rawEvent[field] = lesson.rawEvent[field];
+    }
+    return {
+      client_key: key,
+      original_label: selection.teacher.label,
+      original_description: selection.teacher.description,
+      replacement_label: replacement.label,
+      replacement_description: replacement.description,
+      lesson: {
+        discipline: lesson.discipline, kindOfWork: lesson.kindOfWork ?? null,
+        auditorium: lesson.auditorium ?? null, building: lesson.building ?? null,
+        lecturer: lesson.lecturer ?? null, group: lesson.group ?? null, subgroup: lesson.subgroup ?? null,
+        rawEvent
+      }
+    };
+  }
+
+  async function confirmStoredReplacement(item: ConfirmedReplacement, reason = '', retry = true) {
+    try {
+      const detail = await plansRequest(`/${item.planId}`) as any;
+      await plansRequest(`/${item.planId}/substitutions/${item.substitutionId}/confirm`, 'POST', { version: detail.version, ...(reason.trim() ? { reason: reason.trim(), expected_conflict_hash: item.conflictHash } : {}) });
+      const updated = { ...item, status: 'confirmed' as const, issues: undefined, conflictHash: undefined, serverMessage: undefined };
+      confirmedReplacements = confirmedReplacements.map((entry) => entry.key === item.key ? updated : entry);
+      confirmationReasons = { ...confirmationReasons, [item.key]: '' };
+      boardNotice = '';
+      return true;
+    } catch (cause) {
+      const err = cause as PlanApiError;
+      const detail = err.detail as any;
+      if (err.status === 409 && detail?.conflict_hash) {
+        const updated = { ...item, status: 'selected' as const, issues: detail.issues ?? [], conflictHash: detail.conflict_hash, serverMessage: detail.message };
+        confirmedReplacements = confirmedReplacements.map((entry) => entry.key === item.key ? updated : entry);
+        boardNotice = 'Сервер обнаружил обстоятельства, требующие подтверждения причины.';
+        return false;
+      }
+      if (err.status === 409 && retry && err.message.includes('План изменился')) return confirmStoredReplacement(item, reason, false);
+      const updated = { ...item, status: 'selected' as const, serverMessage: typeof detail === 'object' ? detail?.message : err.message };
+      confirmedReplacements = confirmedReplacements.map((entry) => entry.key === item.key ? updated : entry);
+      boardNotice = `Замена сохранена, но сервер пока не подтвердил её: ${updated.serverMessage ?? err.message}`;
+      return false;
+    }
+  }
+
+  async function saveReplacement(selection: SelectedLesson, replacement: SearchItem) {
+    if (savingReplacement) return;
+    savingReplacement = true;
+    boardNotice = '';
+    const lessonId = String(selection.lesson.rawEvent.lessonOid ?? `${selection.lesson.discipline}:${selection.lesson.group ?? ''}:${selection.lesson.subgroup ?? ''}`);
+    const key = `${selection.teacher.id}:${selection.date}:${selection.slot.number}:${lessonId}`;
+    try {
+      if (!/^\d{1,20}$/.test(selection.teacher.id) || !/^\d{1,20}$/.test(replacement.id)) throw new Error('Не удалось определить ID преподавателя в расписании.');
+      let plan: any;
+      let slot: any;
+      let substitution: any;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        plan = await getSubstitutionPlan();
+        const existing = (plan.slots ?? []).flatMap((entry: any) => (entry.substitutions ?? []).map((sub: any) => ({ ...sub, event_date: entry.event_date, slot_number: entry.slot_number, starts_at: entry.starts_at, ends_at: entry.ends_at, slot_id: entry.id, plan_id: plan.id }))).find((sub: any) => sub.source_snapshot?.client_key === key && sub.status !== 'cancelled');
+        if (existing) {
+          if (String(existing.substitute_person_id) !== replacement.id) throw new Error('Для этого занятия уже сохранена другая замена. Отмените её в списке, затем выберите нового преподавателя.');
+          await loadConfirmedReplacements();
+          return;
+        }
+        slot = (plan.slots ?? []).find((entry: any) => String(entry.event_date).slice(0, 10) === selection.date && Number(entry.slot_number) === selection.slot.number);
+        if (!slot) {
+          try {
+            const result = await plansRequest(`/${plan.id}/slots`, 'POST', { version: plan.version, event_date: selection.date, slot_number: selection.slot.number, starts_at: `${selection.slot.start}:00`, ends_at: `${selection.slot.end}:00`, resources: [{ kind: 'person', external_id: selection.teacher.id, display_name: selection.teacher.label }] });
+            slot = { id: result.id };
+            plan.version = result.version;
+          } catch (cause) {
+            if ((cause as PlanApiError).status === 409 && attempt === 0) continue;
+            throw cause;
+          }
+        }
+        try {
+          substitution = await plansRequest(`/${plan.id}/substitutions`, 'POST', { version: plan.version, slot_id: slot.id, original_person_id: selection.teacher.id, substitute_person_id: replacement.id, source_snapshot: substitutionSnapshot(selection, replacement, key) });
+          break;
+        } catch (cause) {
+          if ((cause as PlanApiError).status === 409 && attempt === 0) continue;
+          throw cause;
+        }
+      }
+      if (!substitution?.id || !plan?.id) throw new Error('Не удалось сохранить замену. Обновите страницу и попробуйте снова.');
+      const entry: ConfirmedReplacement = { key, planId: plan.id, substitutionId: substitution.id, status: 'selected', originalTeacher: selection.teacher, replacement, date: selection.date, slot: selection.slot, lesson: selection.lesson };
+      confirmedReplacements = [...confirmedReplacements.filter((item) => item.key !== key), entry];
+      await confirmStoredReplacement(entry);
+    } catch (cause) {
+      boardNotice = cause instanceof Error ? cause.message : 'Не удалось сохранить замену.';
+    } finally { savingReplacement = false; }
+  }
+
+  async function saveConfirmedReplacement() {
     if (!selectedLesson || !pickedReplacement) return;
     const selection = selectedLesson;
-    const lessonId = String(selection.lesson.rawEvent.lessonOid ?? `${selection.lesson.discipline}:${selection.lesson.group ?? ''}:${selection.lesson.subgroup ?? ''}`);
-    const key = `${selection.teacher.id}:${selection.date}:${selection.slot.number}:${lessonId}`;
-    const entry: ConfirmedReplacement = {
-      key,
-      originalTeacher: selection.teacher,
-      replacement: pickedReplacement,
-      date: selection.date,
-      slot: selection.slot,
-      lesson: selection.lesson
-    };
-    persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
-    selectedLesson = null;
-    pickedReplacement = null;
+    const replacement = pickedReplacement;
+    await saveReplacement(selection, replacement);
+    if (!boardNotice || confirmedReplacements.some((item) => item.date === selection.date && item.slot.number === selection.slot.number && item.originalTeacher.id === selection.teacher.id && item.replacement.id === replacement.id)) {
+      selectedLesson = null;
+      pickedReplacement = null;
+    }
   }
 
-  function confirmSlotReplacement() {
+  async function confirmSlotReplacement() {
     if (!slotReplacementPick?.target) return;
     const selection = slotReplacementPick.target;
-    const replacement = slotReplacementPick.replacement;
-    const lessonId = String(selection.lesson.rawEvent.lessonOid ?? `${selection.lesson.discipline}:${selection.lesson.group ?? ''}:${selection.lesson.subgroup ?? ''}`);
-    const key = `${selection.teacher.id}:${selection.date}:${selection.slot.number}:${lessonId}`;
-    const entry: ConfirmedReplacement = {
-      key,
-      originalTeacher: selection.teacher,
-      replacement,
-      date: selection.date,
-      slot: selection.slot,
-      lesson: selection.lesson
-    };
-    persistConfirmedReplacements([...confirmedReplacements.filter((item) => item.key !== key), entry]);
-    slotReplacementPick = null;
+    await saveReplacement(selection, slotReplacementPick.replacement);
+    if (confirmedReplacements.some((item) => item.date === selection.date && item.slot.number === selection.slot.number && item.originalTeacher.id === selection.teacher.id && item.replacement.id === slotReplacementPick?.replacement.id)) slotReplacementPick = null;
   }
 
-  function removeConfirmedReplacement(key: string) {
-    persistConfirmedReplacements(confirmedReplacements.filter((item) => item.key !== key));
+  async function confirmPendingReplacement(item: ConfirmedReplacement) {
+    if (await confirmStoredReplacement(item, confirmationReasons[item.key] ?? '')) await loadConfirmedReplacements();
+  }
+
+  async function removeConfirmedReplacement(key: string) {
+    const item = confirmedReplacements.find((entry) => entry.key === key);
+    if (!item) return;
+    try {
+      const plan = await plansRequest(`/${item.planId}`) as any;
+      await plansRequest(`/${item.planId}/substitutions/${item.substitutionId}/cancel`, 'POST', { version: plan.version });
+      await loadConfirmedReplacements();
+      boardNotice = '';
+    } catch (cause) { boardNotice = cause instanceof Error ? `Не удалось отменить замену: ${cause.message}` : 'Не удалось отменить замену.'; }
+  }
+
+  async function openConfirmedReplacements() {
+    await loadConfirmedReplacements();
+    showConfirmedReplacements = true;
   }
 
   onMount(() => {
     const updateCurrentDate = () => { currentDateIso = toIso(new Date()); };
     const currentDateTimer = window.setInterval(updateCurrentDate, 60_000);
-    try {
-      const saved = JSON.parse(localStorage.getItem(CONFIRMED_REPLACEMENTS_KEY) ?? '[]');
-      if (Array.isArray(saved)) confirmedReplacements = saved.filter((item) => item && typeof item.key === 'string' && item.originalTeacher?.label && item.replacement?.label && item.lesson && item.slot && item.date);
-    } catch { confirmedReplacements = []; }
+    void loadConfirmedReplacements();
     void refreshBoard();
-    return () => window.clearInterval(currentDateTimer);
+    return () => { window.clearInterval(currentDateTimer); if (refreshTimer !== null) window.clearTimeout(refreshTimer); boardRequestId++; };
   });
 </script>
 
 <PlannerPageFrame section="ПЛАНИРОВАНИЕ" sectionNumber="03" breadcrumb="Замены" title="Замены занятий" description="Найдите занятие на кафедре и подберите свободного коллегу для замены" icon="⇄" on:home>
-  <button class="selection-bar confirmed-replacements-trigger" type="button" aria-label={`Открыть выбранные замены: ${confirmedReplacements.length}`} on:click={() => showConfirmedReplacements = true}>
+  <button class="selection-bar confirmed-replacements-trigger" type="button" aria-label={`Открыть выбранные замены: ${confirmedReplacements.length}`} on:click={openConfirmedReplacements}>
     <span class="selection-count" aria-hidden="true">{confirmedReplacements.length}</span>
     <span><strong>Выбранные замены</strong><small>Посмотреть список</small></span>
-    <span class="confirmed-replacements-open" aria-hidden="true">↗</span>
+    <span class="confirmed-replacements-open"><AppIcon name="arrow-up-right" size={18} /></span>
   </button>
   <PlannerFilterBar slot="filters" ariaLabel="Фильтры расписания замен">
     <div class="sub-filter department-filter"><span class="sub-filter-label">Кафедра</span><span class="department-value">ПМФИ</span></div>
-    <div class="sub-filter"><label for="sub-start">Период с</label><input id="sub-start" type="date" bind:value={start} /></div>
-    <div class="sub-filter"><label for="sub-finish">по</label><input id="sub-finish" type="date" min={start} bind:value={finish} /></div>
-    <button class="primary-button sub-load-button" type="button" disabled={loading || start > finish} on:click={refreshBoard}>{loading ? 'Загружаем…' : 'Показать расписание'}<span aria-hidden="true">↗</span></button>
+    <div class="sub-filter"><label for="sub-start">Период с</label><input id="sub-start" type="date" bind:value={start} on:change={queueRefresh} /></div>
+    <div class="sub-filter"><label for="sub-finish">по</label><input id="sub-finish" type="date" min={start} bind:value={finish} on:change={queueRefresh} /></div>
   </PlannerFilterBar>
 
   <PlannerToolbar slot="toolbar" ariaLabel="Обозначения и настройки расписания">
@@ -577,7 +752,7 @@
 {#if slotReplacementPick}
   <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) slotReplacementPick = null; }} on:keydown={(event) => event.key === 'Escape' && (slotReplacementPick = null)}>
     <div class="sub-modal slot-replacement-modal" role="dialog" aria-modal="true" aria-labelledby="slot-replacement-title">
-      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => slotReplacementPick = null}>×</button>
+      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => slotReplacementPick = null}><AppIcon name="close" size={18} /></button>
       <span class="section-kicker">ПОДБОР ЗАМЕНЫ</span>
       <h2 id="slot-replacement-title">Кого заменить этим преподавателем?</h2>
       <p class="sub-modal-context"><strong>Заменяющий: {slotReplacementPick.replacement.label}</strong><br />Дата и пара уже заданы выбранной клеткой. Выберите преподавателя и занятие.</p>
@@ -591,7 +766,7 @@
         {:else}<div class="confirmed-replacements-empty"><strong>На эту пару нет занятий для замены</strong><p>Выберите свободного преподавателя в другом слоте расписания.</p></div>{/each}
       </div>
       {#if slotReplacementPick.target}
-        <div class="slot-replacement-confirm"><div><span>Будет заменять · {formatDate(slotReplacementPick.date)}, {slotReplacementPick.slot.number}-я пара · {slotReplacementPick.slot.start}–{slotReplacementPick.slot.end}</span><strong>{slotReplacementPick.target.teacher.label} → {slotReplacementPick.replacement.label}</strong><small>{slotReplacementPick.target.lesson.discipline}{#if slotReplacementPick.target.lesson.group} · {slotReplacementPick.target.lesson.group}{#if slotReplacementPick.target.lesson.subgroup} / подгр. {slotReplacementPick.target.lesson.subgroup}{/if}{/if}</small></div><button type="button" class="primary-button" on:click={confirmSlotReplacement}>Подтвердить замену</button></div>
+        <div class="slot-replacement-confirm"><div><span>Будет заменять · {formatDate(slotReplacementPick.date)}, {slotReplacementPick.slot.number}-я пара · {slotReplacementPick.slot.start}–{slotReplacementPick.slot.end}</span><strong>{slotReplacementPick.target.teacher.label} → {slotReplacementPick.replacement.label}</strong><small>{slotReplacementPick.target.lesson.discipline}{#if slotReplacementPick.target.lesson.group} · {slotReplacementPick.target.lesson.group}{#if slotReplacementPick.target.lesson.subgroup} / подгр. {slotReplacementPick.target.lesson.subgroup}{/if}{/if}</small></div><button type="button" class="primary-button" disabled={savingReplacement} on:click={confirmSlotReplacement}>{savingReplacement ? 'Сохраняем…' : 'Подтвердить замену'}</button></div>
       {/if}
     </div>
   </div>
@@ -600,7 +775,7 @@
 {#if selectedLesson}
   <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) selectedLesson = null; }} on:keydown={(event) => event.key === 'Escape' && (selectedLesson = null)}>
     <div class="sub-modal" role="dialog" aria-modal="true" aria-labelledby="replacement-title">
-      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => selectedLesson = null}>×</button>
+      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => selectedLesson = null}><AppIcon name="close" size={18} /></button>
       <span class="section-kicker">ПОДБОР ЗАМЕНЫ</span>
       <h2 id="replacement-title">{selectedLesson.lesson.discipline}</h2>
       <p class="sub-modal-context">{selectedLesson.teacher.label} · {selectedLesson.lesson.group ?? 'группа не указана'}<br />{formatDate(selectedLesson.date, { weekday: 'long', day: 'numeric', month: 'long' })}, {selectedLesson.slot.start}–{selectedLesson.slot.end}</p>
@@ -634,7 +809,7 @@
         <div class="sub-candidate-list">
           {#each otherCandidates as candidate (candidate.person.id)}
             <button type="button" class="sub-candidate" class:is-picked={pickedReplacement?.id === candidate.person.id} class:status-free={candidate.status === 'free'} class:status-window={candidate.status === 'window'} class:status-no-lessons={candidate.status === 'no-lessons'} class:status-error={candidate.status === 'error'} disabled={candidate.status !== 'free' && candidate.status !== 'window' && candidate.status !== 'no-lessons'} on:click={() => selectReplacement(candidate)}>
-              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small>{#if candidate.status === 'busy' && candidateBusyText(candidate)}<small class="candidate-busy-detail">Занят: {candidateBusyText(candidate)}</small>{/if}</span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}>×</i>
+              <span><strong>{candidate.person.label}</strong><small>{candidate.person.description}</small>{#if candidate.status === 'busy' && candidateBusyText(candidate)}<small class="candidate-busy-detail">Занят: {candidateBusyText(candidate)}</small>{/if}</span><b>{candidateStatusText(candidate)}</b><i role="button" tabindex="0" aria-label={`Убрать ${candidate.person.label}`} on:click|stopPropagation={() => removeOther(candidate.person.id)} on:keydown={(event) => event.key === 'Enter' && removeOther(candidate.person.id)}><AppIcon name="close" size={16} /></i>
             </button>
           {/each}
         </div>
@@ -643,7 +818,7 @@
       <p class="sub-modal-footnote">Зелёный — свободен без окон · жёлтый — свободен в окно · красный — сегодня нет пар. Выбор помогает согласовать замену и не меняет исходное расписание.</p>
       <div class="sub-confirm-bar">
         <div>{#if pickedReplacement}<span>Замена · {formatDate(selectedLesson.date)}, {selectedLesson.slot.number}-я пара · {selectedLesson.slot.start}–{selectedLesson.slot.end}</span><strong>{selectedLesson.teacher.label} → {pickedReplacement.label}</strong><small>{selectedLesson.lesson.discipline}{#if selectedLesson.lesson.group} · {selectedLesson.lesson.group}{#if selectedLesson.lesson.subgroup} / подгр. {selectedLesson.lesson.subgroup}{/if}{/if}</small>{:else}<span>Сначала выберите свободного преподавателя</span>{/if}</div>
-        <button type="button" class="primary-button" disabled={!pickedReplacement} on:click={saveConfirmedReplacement}>Подтвердить замену</button>
+        <button type="button" class="primary-button" disabled={!pickedReplacement || savingReplacement} on:click={saveConfirmedReplacement}>{savingReplacement ? 'Сохраняем…' : 'Подтвердить замену'}</button>
       </div>
     </div>
   </div>
@@ -652,24 +827,26 @@
 {#if showConfirmedReplacements}
   <div class="sub-modal-backdrop" role="presentation" on:click={(event) => { if (event.target === event.currentTarget) showConfirmedReplacements = false; }} on:keydown={(event) => event.key === 'Escape' && (showConfirmedReplacements = false)}>
     <div class="sub-modal confirmed-replacements-modal" role="dialog" aria-modal="true" aria-labelledby="confirmed-replacements-title">
-      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => showConfirmedReplacements = false}>×</button>
+      <button class="sub-modal-close" type="button" aria-label="Закрыть" on:click={() => showConfirmedReplacements = false}><AppIcon name="close" size={18} /></button>
       <span class="section-kicker">ЗАМЕНЫ · СПИСОК</span>
       <h2 id="confirmed-replacements-title">Выбранные замены</h2>
-      <p class="sub-modal-context">Это ваш список в текущем браузере. Он помогает отслеживать выбор и не меняет общее расписание.</p>
+      <p class="sub-modal-context">Общий список замен кафедры. Подтверждённые назначения сразу видны коллегам с доступом к планированию.</p>
       {#if confirmedReplacements.length}
         <div class="confirmed-replacements-list">
           {#each [...confirmedReplacements].sort((a, b) => a.date.localeCompare(b.date) || a.slot.number - b.slot.number) as item (item.key)}
             <article class="confirmed-replacement-card">
               <div class="confirmed-replacement-date"><strong>{formatDate(item.date, { weekday: 'short', day: 'numeric', month: 'long' })}</strong><span>{item.slot.number} пара · {item.slot.start}–{item.slot.end}</span></div>
-              <div class="confirmed-replacement-detail"><span>{item.lesson.discipline}{#if item.lesson.group} · {item.lesson.group}{#if item.lesson.subgroup} / подгр. {item.lesson.subgroup}{/if}{/if}</span><strong><small>Вместо:</small> {item.originalTeacher.label} <i>→</i> <small>замещает:</small> {item.replacement.label}</strong></div>
-              <button type="button" aria-label={`Удалить замену ${item.originalTeacher.label} на ${item.replacement.label}`} on:click={() => removeConfirmedReplacement(item.key)}>×</button>
+              <div class="confirmed-replacement-detail"><span>{item.lesson.discipline}{#if item.lesson.group} · {item.lesson.group}{#if item.lesson.subgroup} / подгр. {item.lesson.subgroup}{/if}{/if}</span><strong><small>Вместо:</small> {item.originalTeacher.label} <i>→</i> <small>замещает:</small> {item.replacement.label}</strong><small class="replacement-status" class:replacement-status-confirmed={item.status === 'confirmed'}>{item.status === 'confirmed' ? 'Подтверждена' : 'Ожидает подтверждения'}</small>
+                {#if item.issues?.length}<small class="replacement-issues">{#each item.issues as issue}<span>{issue.kind === 'unknown_schedule' ? 'Не удалось проверить актуальность расписания.' : issue.kind === 'source_conflict' ? `У преподавателя есть занятие ${issue.start ?? ''}–${issue.end ?? ''}: ${issue.lesson ?? ''}` : 'Обнаружен конфликт с другой заменой.'}</span>{/each}</small>{/if}
+                {#if item.conflictHash}<label class="replacement-reason-label">Причина подтверждения<input type="text" bind:value={confirmationReasons[item.key]} maxlength="2000" placeholder="Укажите причину" /></label><button type="button" class="primary-button replacement-confirm-button" disabled={!confirmationReasons[item.key]?.trim()} on:click={() => confirmPendingReplacement(item)}>Подтвердить с причиной</button>{:else if item.status === 'selected'}{#if item.serverMessage}<small class="replacement-issues">{item.serverMessage}</small>{/if}<button type="button" class="replacement-retry-button" on:click={() => confirmPendingReplacement(item)}>Проверить и подтвердить</button>{/if}
+              </div>
+              <button type="button" aria-label={`Удалить замену ${item.originalTeacher.label} на ${item.replacement.label}`} on:click={() => removeConfirmedReplacement(item.key)}><AppIcon name="close" size={18} /></button>
             </article>
           {/each}
         </div>
       {:else}
-        <div class="confirmed-replacements-empty"><span aria-hidden="true">↗</span><strong>Пока нет выбранных замен</strong><p>Выберите занятие в таблице, затем отметьте преподавателя и подтвердите замену.</p></div>
+        <div class="confirmed-replacements-empty"><AppIcon name="arrow-up-right" size={18} /><strong>Пока нет выбранных замен</strong><p>Выберите занятие в таблице, затем отметьте преподавателя и подтвердите замену.</p></div>
       {/if}
-      {#if confirmedReplacements.length}<button type="button" class="confirmed-replacements-clear" on:click={() => persistConfirmedReplacements([])}>Очистить список</button>{/if}
     </div>
   </div>
 {/if}
@@ -705,6 +882,7 @@
   .confirmed-replacements-modal{max-width:720px}.confirmed-replacements-list{display:flex;flex-direction:column;gap:8px;max-height:min(54vh,500px);overflow:auto}.confirmed-replacement-card{display:grid;grid-template-columns:minmax(125px,.75fr) minmax(0,2fr) 28px;align-items:center;gap:12px;padding:12px;border:1px solid #dfe9e1;border-radius:9px;background:#fbfdfb}.confirmed-replacement-date,.confirmed-replacement-detail{display:flex;flex-direction:column;gap:4px;min-width:0}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{color:#315946;font-size:10px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{color:#7d8e83;font-size:9px;line-height:1.4}.confirmed-replacement-detail strong{overflow-wrap:anywhere}.confirmed-replacement-detail i{color:#81ad92;font-style:normal;padding:0 3px}.confirmed-replacement-card>button{width:27px;height:27px;border:0;border-radius:6px;background:#f5e9e7;color:#a45b55;font-size:18px}.confirmed-replacements-empty{display:grid;justify-items:center;gap:8px;padding:35px 20px;border:1px dashed #dce8de;border-radius:9px;background:#fbfdfb;text-align:center}.confirmed-replacements-empty>span{display:grid;place-items:center;width:38px;height:38px;border-radius:12px;background:#eaf4ed;color:#579374;font-size:20px}.confirmed-replacements-empty strong{color:#385e49;font-size:12px}.confirmed-replacements-empty p{max-width:340px;margin:0;color:#819187;font-size:10px;line-height:1.6}.confirmed-replacements-clear{display:block;margin:13px 0 0 auto;border:0;background:transparent;color:#a45b55;font-size:10px;font-weight:800}
   .slot-replacement-modal{max-width:720px}.slot-replacement-modal .sub-modal-context strong{color:#315946}.slot-replacement-target{min-height:57px}.slot-replacement-target small{font-size:9px;line-height:1.45}.slot-replacement-target b{flex:none;background:#eef6ef;color:#2d6d54;padding:7px 9px}.slot-replacement-target.is-picked{background:#f1f8f2}.slot-replacement-confirm{position:sticky;bottom:-26px;display:flex;align-items:center;justify-content:space-between;gap:14px;margin:15px -26px -26px;padding:13px 26px 18px;border-top:1px solid #e4ebe5;background:linear-gradient(180deg,rgba(255,255,255,.96),#fff 24%)}.slot-replacement-confirm>div{display:flex;flex-direction:column;gap:3px;min-width:0;color:#78897e;font-size:9px}.slot-replacement-confirm strong{overflow:hidden;color:#315946;font-size:10px;text-overflow:ellipsis;white-space:nowrap}.slot-replacement-confirm .primary-button{flex:0 0 auto;padding:11px 14px;font-size:10px;box-shadow:none}
   .substitution-help{flex:1 1 100%;width:100%;margin:2px 0 0;color:#6f8176;font-size:11px;font-weight:500;line-height:1.5}.substitution-help strong{color:#315946;font-weight:800}.sub-display-options{flex-wrap:nowrap;gap:6px}.sub-status-options,.sub-detail-options{flex-wrap:nowrap;gap:4px}.sub-display-option{font-size:10px;padding:6px 7px;gap:4px}.sub-status-options .sub-display-option input,.sub-detail-options .sub-display-option input{flex:0 0 13px}.sub-status-text{font-size:10px;line-height:1.35}.sub-metadata-line{font-size:10px}.sub-candidate strong{font-size:12px}.sub-candidate small{font-size:10px;line-height:1.4}.sub-candidate b{font-size:9px}.sub-modal-context{font-size:12px}.sub-modal-footnote{font-size:10px}.confirmed-replacement-date strong,.confirmed-replacement-detail strong{font-size:11px}.confirmed-replacement-date span,.confirmed-replacement-detail>span{font-size:10px}.confirmed-replacements-empty p{font-size:11px}.slot-replacement-target{min-height:60px}.slot-replacement-target small{font-size:10px}.slot-replacement-target b{font-size:10px}.slot-replacement-confirm>div{font-size:10px}.slot-replacement-confirm strong{font-size:11px}.slot-replacement-confirm small,.sub-confirm-bar small{color:#718579;font-size:10px;line-height:1.35}.sub-confirm-bar>div{font-size:10px}.sub-confirm-bar strong{font-size:11px}.sub-teacher-line[role="button"]:focus-visible{outline:3px solid #82bca5;outline-offset:1px;position:relative;z-index:1}.sub-teacher-line:not(.sub-error):hover{border-color:#80b59a;box-shadow:0 1px 4px rgba(36,95,80,.12);filter:none}
+  .replacement-status{align-self:flex-start;padding:3px 6px;border-radius:5px;background:#f4f0e3;color:#78622b;font-size:9px;font-weight:800}.replacement-status-confirmed{background:#eaf4ed;color:#286247}.replacement-issues{display:flex;flex-direction:column;gap:3px;color:#8a6127;font-size:10px;line-height:1.4}.replacement-reason-label{display:grid;gap:5px;color:#65776c;font-size:10px;font-weight:700}.replacement-reason-label input{min-height:36px;padding:7px 9px;border:1px solid #dbe6dc;border-radius:6px;background:#fff;color:#315946;font:inherit}.replacement-confirm-button,.replacement-retry-button{align-self:flex-start;padding:8px 11px;font-size:10px}.replacement-retry-button{border:1px solid #dce8de;border-radius:6px;background:#f3f7f3;color:#315946;font-weight:800;cursor:pointer}
   @media(max-width:900px){.sub-display-options{align-items:flex-start;flex-direction:column;flex-wrap:wrap}.sub-status-options,.sub-detail-options{flex-wrap:wrap}.sub-detail-options{margin-left:0;justify-content:flex-start}}
   @media(max-width:560px){:global(.workspace.substitution-workspace){padding-bottom:125px}.sub-modal{padding:20px}.sub-candidate-tabs button{flex:1}.substitution-legend{gap:8px 12px}.sub-confirm-bar{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.sub-confirm-bar .primary-button{width:100%;justify-content:center}.confirmed-replacement-card{grid-template-columns:minmax(0,1fr) 28px}.confirmed-replacement-date{grid-column:1}.confirmed-replacement-detail{grid-column:1;grid-row:2}.confirmed-replacement-card>button{grid-column:2;grid-row:1 / span 2}.confirmed-replacements-trigger{right:14px;bottom:max(14px,env(safe-area-inset-bottom));padding:8px 10px;gap:8px}.confirmed-replacements-trigger>span:nth-child(2){min-width:0}.confirmed-replacements-trigger .selection-count{width:32px;height:32px;font-size:17px}.slot-replacement-confirm{bottom:-20px;margin:12px -20px -20px;padding:12px 20px 14px;align-items:stretch;flex-direction:column}.slot-replacement-confirm .primary-button{width:100%;justify-content:center}}
 </style>
