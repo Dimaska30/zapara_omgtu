@@ -1,0 +1,299 @@
+Project zapara {
+  database_type: 'PostgreSQL'
+  Note: 'Актуальная схема схемы PostgreSQL zapara по миграциям 0002–0008. Миграция 0001 таблиц не создаёт.'
+}
+
+Table zapara.schedule_windows {
+  id bigint [pk, increment]
+  entity_kind text [not null, note: "CHECK IN ('person', 'group', 'auditorium', 'building')"]
+  external_id text [not null, note: "Числовой ID источника; CHECK ~ '^[0-9]{1,20}$'"]
+  range_start date [not null]
+  range_end date [not null, note: 'CHECK (range_end = range_start + 6)']
+  payload jsonb
+  last_success_at timestamptz
+  last_attempt_at timestamptz
+  last_error text
+  last_accessed_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (entity_kind, external_id, range_start) [unique]
+  }
+
+  Note: 'CHECK ((payload IS NULL) = (last_success_at IS NULL))'
+}
+
+Table zapara.schedule_jobs {
+  window_id bigint [pk]
+  due_at timestamptz [not null, default: `now()`]
+  status text [not null, default: 'pending', note: "CHECK IN ('pending', 'running')"]
+  lease_token uuid
+  locked_until timestamptz
+  failures integer [not null, default: 0, note: 'CHECK (failures >= 0)']
+
+  Note: 'CHECK ((status = running) = (lease_token IS NOT NULL AND locked_until IS NOT NULL)); partial index schedule_jobs_due_idx on due_at WHERE status = pending'
+}
+
+Table zapara.schedule_source_limit {
+  source text [pk]
+  next_allowed_at timestamptz [not null, default: `now()`]
+  lease_token uuid
+  locked_until timestamptz
+  last_job_kind text [not null, default: 'dictionary', note: "CHECK IN ('schedule', 'dictionary')"]
+
+  Note: 'CHECK ((lease_token IS NULL) = (locked_until IS NULL)); initial row: source=omgtu'
+}
+
+Table zapara.dictionary_cache {
+  id bigint [pk, increment]
+  kind text [not null, note: "CHECK IN ('groups', 'lecturers', 'buildings', 'auditoriums')"]
+  scope text [not null, default: '', note: "Пустая строка или числовой ID; CHECK = '' OR ~ '^[0-9]{1,20}$'"]
+  payload jsonb
+  last_success_at timestamptz
+  last_attempt_at timestamptz
+  last_error text
+  last_accessed_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (kind, scope) [unique]
+  }
+
+  Note: 'CHECK ((payload IS NULL) = (last_success_at IS NULL))'
+}
+
+Table zapara.dictionary_jobs {
+  cache_id bigint [pk]
+  due_at timestamptz [not null, default: `now()`]
+  status text [not null, default: 'pending', note: "CHECK IN ('pending', 'running')"]
+  lease_token uuid
+  locked_until timestamptz
+  failures integer [not null, default: 0, note: 'CHECK (failures >= 0)']
+
+  Note: 'CHECK ((status = running) = (lease_token IS NOT NULL AND locked_until IS NOT NULL)); partial index dictionary_jobs_due_idx on due_at WHERE status = pending'
+}
+
+Table zapara.departments {
+  id uuid [pk]
+  name text [not null, unique]
+  source_chair_oid text [unique]
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table zapara.users {
+  id uuid [pk]
+  email text [not null]
+  display_name text [not null]
+  password_hash text
+  activated_at timestamptz
+  disabled_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+  last_login_at timestamptz
+
+  Note: 'Уникальный case-insensitive индекс users_email_unique по lower(email)'
+}
+
+Table zapara.system_admins {
+  user_id uuid [pk]
+  created_at timestamptz [not null, default: `now()`]
+  revoked_at timestamptz
+}
+
+Table zapara.memberships {
+  id uuid [pk]
+  user_id uuid [not null]
+  department_id uuid [not null]
+  role text [not null, note: "CHECK IN ('admin', 'planner', 'viewer')"]
+  status text [not null, default: 'active', note: "CHECK IN ('active', 'suspended', 'revoked')"]
+  can_override_source_conflict boolean [not null, default: false]
+  created_at timestamptz [not null, default: `now()`]
+  version integer [not null, default: 1, note: 'CHECK (version > 0)']
+
+  indexes {
+    (user_id, department_id) [unique]
+  }
+}
+
+Table zapara.teacher_links {
+  user_id uuid [not null]
+  person_id text [not null, note: "Числовой ID преподавателя; CHECK ~ '^[0-9]{1,20}$'"]
+  lecturer_oid text [not null, unique, note: "Числовой ID преподавателя в справочнике; CHECK ~ '^[0-9]{1,20}$'"]
+  verified_by uuid
+  created_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (user_id, person_id) [pk]
+    person_id [unique]
+  }
+}
+
+Table zapara.account_tokens {
+  id uuid [pk]
+  user_id uuid [not null]
+  kind text [not null, note: "CHECK IN ('invitation', 'password_reset')"]
+  token_hash bytea [not null, unique]
+  expires_at timestamptz [not null]
+  created_by uuid
+  created_at timestamptz [not null, default: `now()`]
+  used_at timestamptz
+  revoked_at timestamptz
+
+  Note: 'Partial unique index account_tokens_active_uq on (user_id, kind) WHERE used_at IS NULL AND revoked_at IS NULL'
+}
+
+Table zapara.sessions {
+  id uuid [pk]
+  user_id uuid [not null]
+  token_hash bytea [not null, unique]
+  expires_at timestamptz [not null]
+  created_at timestamptz [not null, default: `now()`]
+  revoked_at timestamptz
+}
+
+Table zapara.login_limits {
+  key_hash bytea [pk]
+  failures integer [not null, default: 0]
+  blocked_until timestamptz
+  last_attempt_at timestamptz [not null, default: `now()`]
+}
+
+Table zapara.account_audit {
+  id bigint [pk, increment]
+  actor_id uuid
+  target_id uuid
+  department_id uuid
+  action text [not null]
+  details jsonb [not null, default: `'{}'`]
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table zapara.plans {
+  id uuid [pk]
+  department_id uuid [not null]
+  owner_id uuid [not null]
+  kind text [not null, note: "CHECK IN ('consultation', 'retake', 'meeting', 'substitution')"]
+  title text [not null, default: '']
+  status text [not null, default: 'draft', note: "CHECK IN ('draft', 'confirmed', 'cancelled', 'archived')"]
+  version integer [not null, default: 1, note: 'CHECK (version > 0)']
+  created_at timestamptz [not null, default: `now()`]
+  updated_at timestamptz [not null, default: `now()`]
+  settings jsonb [not null, default: `'{}'`]
+
+  indexes {
+    (department_id, status, updated_at) [name: 'plans_department_idx']
+  }
+}
+
+Table zapara.plan_grants {
+  plan_id uuid [not null]
+  user_id uuid [not null]
+  permission text [not null, note: "CHECK IN ('edit', 'confirm')"]
+  granted_by uuid [not null]
+
+  indexes {
+    (plan_id, user_id) [pk]
+  }
+}
+
+Table zapara.plan_slots {
+  id uuid [pk]
+  plan_id uuid [not null]
+  event_date date [not null]
+  slot_number smallint [not null, note: 'CHECK (slot_number > 0)']
+  starts_at time [not null]
+  ends_at time [not null]
+  timezone text [not null, default: 'Asia/Omsk']
+  status text [not null, default: 'selected', note: "CHECK IN ('selected', 'confirmed', 'cancelled')"]
+
+  indexes {
+    (plan_id, event_date, slot_number) [unique]
+  }
+
+  Note: 'CHECK (ends_at > starts_at)'
+}
+
+Table zapara.slot_resources {
+  slot_id uuid [not null]
+  kind text [not null, note: "CHECK IN ('person', 'group', 'auditorium')"]
+  external_id text [not null, note: "Числовой ID ресурса; CHECK ~ '^[0-9]{1,20}$'"]
+  display_name text [not null, default: '']
+
+  indexes {
+    (slot_id, kind, external_id) [pk]
+  }
+}
+
+Table zapara.substitutions {
+  id uuid [pk]
+  slot_id uuid [not null]
+  original_person_id text [not null, note: "Числовой ID; CHECK ~ '^[0-9]{1,20}$'"]
+  substitute_person_id text [not null, note: "Числовой ID; CHECK ~ '^[0-9]{1,20}$'"]
+  source_snapshot jsonb [not null]
+  status text [not null, default: 'selected', note: "CHECK IN ('selected', 'confirmed', 'cancelled')"]
+  confirmed_by uuid
+  confirmed_at timestamptz
+  created_at timestamptz [not null, default: `now()`]
+
+  Note: 'CHECK (original_person_id <> substitute_person_id); CHECK (status <> confirmed OR confirmed_at IS NOT NULL)'
+}
+
+Table zapara.plan_activity {
+  id bigint [pk, increment]
+  plan_id uuid [not null]
+  actor_id uuid [not null]
+  action text [not null]
+  details jsonb [not null, default: `'{}'`]
+  created_at timestamptz [not null, default: `now()`]
+}
+
+Table zapara.notifications {
+  id uuid [pk]
+  user_id uuid [not null]
+  plan_id uuid [not null]
+  kind text [not null]
+  payload jsonb [not null, default: `'{}'`]
+  created_at timestamptz [not null, default: `now()`]
+  read_at timestamptz
+
+  indexes {
+    (user_id, created_at) [name: 'notifications_user_idx']
+  }
+}
+
+Table zapara.schedule_alerts {
+  subject_kind text [not null, note: "CHECK IN ('slot', 'substitution')"]
+  subject_id uuid [not null]
+  resource_kind text [not null, note: "CHECK IN ('person', 'group', 'auditorium')"]
+  resource_id text [not null]
+  active boolean [not null, default: true]
+  updated_at timestamptz [not null, default: `now()`]
+
+  indexes {
+    (subject_kind, subject_id, resource_kind, resource_id) [pk]
+  }
+}
+
+Ref: zapara.schedule_jobs.window_id > zapara.schedule_windows.id [delete: cascade]
+Ref: zapara.dictionary_jobs.cache_id > zapara.dictionary_cache.id [delete: cascade]
+Ref: zapara.system_admins.user_id > zapara.users.id
+Ref: zapara.memberships.user_id > zapara.users.id
+Ref: zapara.memberships.department_id > zapara.departments.id
+Ref: zapara.teacher_links.user_id > zapara.users.id
+Ref: zapara.teacher_links.verified_by > zapara.users.id
+Ref: zapara.account_tokens.user_id > zapara.users.id
+Ref: zapara.account_tokens.created_by > zapara.users.id
+Ref: zapara.sessions.user_id > zapara.users.id
+Ref: zapara.account_audit.actor_id > zapara.users.id
+Ref: zapara.account_audit.target_id > zapara.users.id
+Ref: zapara.account_audit.department_id > zapara.departments.id
+Ref: zapara.plans.department_id > zapara.departments.id
+Ref: zapara.plans.owner_id > zapara.users.id
+Ref: zapara.plan_grants.plan_id > zapara.plans.id
+Ref: zapara.plan_grants.user_id > zapara.users.id
+Ref: zapara.plan_grants.granted_by > zapara.users.id
+Ref: zapara.plan_slots.plan_id > zapara.plans.id
+Ref: zapara.slot_resources.slot_id > zapara.plan_slots.id
+Ref: zapara.substitutions.slot_id > zapara.plan_slots.id
+Ref: zapara.substitutions.confirmed_by > zapara.users.id
+Ref: zapara.plan_activity.plan_id > zapara.plans.id
+Ref: zapara.plan_activity.actor_id > zapara.users.id
+Ref: zapara.notifications.user_id > zapara.users.id
+Ref: zapara.notifications.plan_id > zapara.plans.id
